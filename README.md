@@ -180,6 +180,43 @@ python bench.py --kernels redist_v8d FA4
 (~1.07 GHz on B200), so the wallclock from `cudaEvent` would be ~1.5× faster
 but apples-to-apples comparison requires the locked-clock metric.
 
+## Perfetto traces
+
+`redist_v8d.cu` ships with an intra-kernel per-warp profiler ring (gated by
+`-DENABLE_PROF=1` at compile time) that records per-event start/end clock
+deltas for the 22 `EV_*` regions defined in the source. `trace_dump.py`
+rebuilds the kernel with profiling enabled, runs it once at a small shape,
+and emits a `.pftrace` for [ui.perfetto.dev](https://ui.perfetto.dev).
+
+```bash
+python trace_dump.py 1024 2048   # q=1024, sk=2048 → traces/trace_redist_v8d_pp1_q1024_sk2048.pftrace
+```
+
+The trace gives a clickable timeline of TMA / MMA / softmax / correction
+across all 16 warps of one cluster, with cross-warp flow edges so you can
+walk dependencies one hop at a time (`P0V_<j>` → `Wco0_<j>` → `Rm0_<j>` →
+`Q0K_<j>` and back). Drag-and-drop the `.pftrace` into Perfetto's web UI.
+
+`trace_chain.py` is a CLI helper for walking flow edges programmatically
+without opening the UI:
+
+```bash
+python trace_chain.py Rm0_3 --trace traces/trace_redist_v8d_pp1_q1024_sk2048.pftrace --depth 4
+python trace_chain.py Q0K_3 --forward --trace …      # walk descendants
+```
+
+The conventions the dumper follows are documented in
+[`TRACE_CONVENTIONS.md`](TRACE_CONVENTIONS.md) — wait-marker shrinking,
+all-warp fan-in for shared-name slices, per-pair COR disambiguation, the
+required user-clickable chain, and the verification checklist. If you
+adapt `trace_dump.py` to another kernel, the conventions doc and the
+`trace-builder` subagent (`.claude/agents/trace-builder.md`) tell Claude
+Code exactly how to do it without re-discovering the rules.
+
+Capacity note: each SM warp emits ~6 events / kv iter; the per-warp ring
+holds `PROF_PER_WARP_SLOTS=256` slots, so a trace at `n_kv > ~42` is
+truncated. The dumper reports the actual captured iter count.
+
 ## Programmatic use
 
 ```python

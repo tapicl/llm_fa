@@ -66,11 +66,16 @@ def forward(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
 
 
 def run(q: int = 32768, sk: int = 131072, seed: int = 0):
+    """Build random Q/K/V at the given shape, run the kernel, return its
+    raw output. When ENABLE_PROF=1, the kernel returns a 3-tuple
+    (O, prof_buf, prof_count); when ENABLE_PROF=0 the same 3-tuple is
+    returned but prof_buf and prof_count are placeholders.
+    """
     torch.manual_seed(seed)
     Q = torch.randn(q,  128, device="cuda", dtype=torch.bfloat16)
     K = torch.randn(sk, 128, device="cuda", dtype=torch.bfloat16)
     V = torch.randn(sk, 128, device="cuda", dtype=torch.bfloat16)
-    return forward(Q, K, V)
+    return mod.redist_v8d_forward(Q, K, V)
 
 
 if __name__ == "__main__":
@@ -78,5 +83,6 @@ if __name__ == "__main__":
     q  = int(sys.argv[1]) if len(sys.argv) > 1 else 32768
     sk = int(sys.argv[2]) if len(sys.argv) > 2 else 131072
     out = run(q=q, sk=sk)
-    print(f"redist_v8d OK  q={q}  sk={sk}  O.shape={tuple(out.shape)}  "
-          f"sum={out.float().sum().item():.3e}")
+    O = out[0] if isinstance(out, (list, tuple)) else out
+    print(f"redist_v8d OK  q={q}  sk={sk}  O.shape={tuple(O.shape)}  "
+          f"sum={O.float().sum().item():.3e}")
