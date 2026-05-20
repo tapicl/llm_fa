@@ -211,7 +211,7 @@ constexpr int SM_STATS_BAR_COUNT = 64;
 #ifndef SKIP_SM_FULL
 #define SKIP_SM_FULL 0
 #endif
-#define PROF_PER_WARP_SLOTS 256
+#define PROF_PER_WARP_SLOTS 320
 #include "profiler.cuh"
 
 enum : int {
@@ -1632,8 +1632,12 @@ llm_fa_kernel(
                 phase_kv_full ^= 1 << s_K;
                 PROF_END_X(EV_MMA_WAIT_K);
 
+                PROF_BEGIN_X(EV_MMA_QK_P0);
                 ISSUE_QK(0, s_K);
+                PROF_END_X(EV_MMA_QK_P0);
+                PROF_BEGIN_X(EV_MMA_QK_P1);
                 ISSUE_QK(1, s_K);
+                PROF_END_X(EV_MMA_QK_P1);
 
                 // Release K stage as soon as both QK MMAs are committed.
                 // tcgen05.commit waits for prior tcgen05 ops to drain, then
@@ -1666,7 +1670,9 @@ llm_fa_kernel(
 #if SPLIT_P_PV && !SKIP_SM_FULL
                     phase_pls ^= 1 << 0;
 #endif
+                    PROF_BEGIN_X(EV_MMA_PV_P0);
                     ISSUE_PV(0, s_V, j == 0, pls_p0);
+                    PROF_END_X(EV_MMA_PV_P0);
                 }
 #if PER_PAIR_DRAIN
                 if (j + 1 == n_kv) {
@@ -1686,7 +1692,9 @@ llm_fa_kernel(
 #if SPLIT_P_PV && !SKIP_SM_FULL
                     phase_pls ^= 1 << 1;
 #endif
+                    PROF_BEGIN_X(EV_MMA_PV_P1);
                     ISSUE_PV(1, s_V, j == 0, pls_p1);
+                    PROF_END_X(EV_MMA_PV_P1);
                 }
 #if PER_PAIR_DRAIN
                 if (j + 1 == n_kv) {
@@ -1723,8 +1731,12 @@ llm_fa_kernel(
                 mbarrier_wait(kv_full(s_K0), (phase_kv_full >> s_K0) & 1);
                 phase_kv_full ^= 1 << s_K0;
                 PROF_END_X(EV_MMA_WAIT_K);
+                PROF_BEGIN_X(EV_MMA_QK_P0);
                 ISSUE_QK(0, s_K0);
+                PROF_END_X(EV_MMA_QK_P0);
+                PROF_BEGIN_X(EV_MMA_QK_P1);
                 ISSUE_QK(1, s_K0);
+                PROF_END_X(EV_MMA_QK_P1);
                 // Release K_0 — both Q0K_0 and Q1K_0 committed via tcgen05.commit.
                 asm volatile(
                     "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
@@ -1751,7 +1763,9 @@ llm_fa_kernel(
 #if SPLIT_P_PV && !SKIP_SM_FULL
                     phase_pls ^= 1 << 1;
 #endif
+                    PROF_BEGIN_X(EV_MMA_PV_P1);
                     ISSUE_PV(1, s_V_prev, false, pls_p1);
+                    PROF_END_X(EV_MMA_PV_P1);
                     // Release V_{S-1} after both PVs (P0V_{S-1} from step S-1, P1V_{S-1} now).
                     asm volatile(
                         "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
@@ -1761,7 +1775,9 @@ llm_fa_kernel(
 
                 // 2. Q1K_S (skip S=0 — Q1K_0 was done in prologue along with K_0 release).
                 if (S >= 1) {
+                    PROF_BEGIN_X(EV_MMA_QK_P1);
                     ISSUE_QK(1, s_K_S);
+                    PROF_END_X(EV_MMA_QK_P1);
                     // Release K_S after both Q0K_S (step S-1) and Q1K_S (now) committed.
                     asm volatile(
                         "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
@@ -1786,7 +1802,9 @@ llm_fa_kernel(
 #if SPLIT_P_PV && !SKIP_SM_FULL
                 phase_pls ^= 1 << 0;
 #endif
+                PROF_BEGIN_X(EV_MMA_PV_P0);
                 ISSUE_PV(0, s_V_S, S == 0, pls_p0);
+                PROF_END_X(EV_MMA_PV_P0);
 #if PER_PAIR_DRAIN
                 // Pair 0 final PV (last loop iter) → fire o_acc_full(0) so tail
                 // epi for pair 0 (warps 0-3) can start while pair 1's PV is
@@ -1803,7 +1821,9 @@ llm_fa_kernel(
                     mbarrier_wait(kv_full(s_K_next), (phase_kv_full >> s_K_next) & 1);
                     phase_kv_full ^= 1 << s_K_next;
                     PROF_END_X(EV_MMA_WAIT_K);
+                    PROF_BEGIN_X(EV_MMA_QK_P0);
                     ISSUE_QK(0, s_K_next);
+                    PROF_END_X(EV_MMA_QK_P0);
                 }
             }
 
@@ -1822,7 +1842,9 @@ llm_fa_kernel(
 #if SPLIT_P_PV && !SKIP_SM_FULL
                 phase_pls ^= 1 << 1;
 #endif
+                PROF_BEGIN_X(EV_MMA_PV_P1);
                 ISSUE_PV(1, s_V_last, n_kv == 1, pls_p1);
+                PROF_END_X(EV_MMA_PV_P1);
 #if PER_PAIR_DRAIN
                 // Pair 1 final PV → o_acc_full(1). This is also the all-MMA
                 // drain (last tcgen05 op on the queue). Combined with the V_last
@@ -1852,8 +1874,12 @@ llm_fa_kernel(
                 mbarrier_wait(kv_full(s_K0), (phase_kv_full >> s_K0) & 1);
                 phase_kv_full ^= 1 << s_K0;
                 PROF_END_X(EV_MMA_WAIT_K);
+                PROF_BEGIN_X(EV_MMA_QK_P0);
                 ISSUE_QK(0, s_K0);
+                PROF_END_X(EV_MMA_QK_P0);
+                PROF_BEGIN_X(EV_MMA_QK_P1);
                 ISSUE_QK(1, s_K0);
+                PROF_END_X(EV_MMA_QK_P1);
                 asm volatile(
                     "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
                     ".multicast::cluster.b64 [%0], %1;" ::
@@ -1884,13 +1910,17 @@ llm_fa_kernel(
 #if SPLIT_P_PV && !SKIP_SM_FULL
                     phase_pls ^= 1 << 0;
 #endif
+                    PROF_BEGIN_X(EV_MMA_PV_P0);
                     ISSUE_PV(0, s_V_S, S == 0, pls_p0);
+                    PROF_END_X(EV_MMA_PV_P0);
                 }
                 PROF_BEGIN_X(EV_MMA_WAIT_K);
                 mbarrier_wait(kv_full(s_K_next), (phase_kv_full >> s_K_next) & 1);
                 phase_kv_full ^= 1 << s_K_next;
                 PROF_END_X(EV_MMA_WAIT_K);
+                PROF_BEGIN_X(EV_MMA_QK_P0);
                 ISSUE_QK(0, s_K_next);
+                PROF_END_X(EV_MMA_QK_P0);
 
                 // stage 1: PV_1_S, release V_S, Q1K_{S+1}
 #if !SKIP_SM_FULL
@@ -1906,14 +1936,18 @@ llm_fa_kernel(
 #if SPLIT_P_PV && !SKIP_SM_FULL
                     phase_pls ^= 1 << 1;
 #endif
+                    PROF_BEGIN_X(EV_MMA_PV_P1);
                     ISSUE_PV(1, s_V_S, S == 0, pls_p1);
+                    PROF_END_X(EV_MMA_PV_P1);
                 }
                 // Release V_S after both PVs
                 asm volatile(
                     "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
                     ".multicast::cluster.b64 [%0], %1;" ::
                         "r"(kv_empty(s_V_S)), "h"(cta_mask) : "memory");
+                PROF_BEGIN_X(EV_MMA_QK_P1);
                 ISSUE_QK(1, s_K_next);
+                PROF_END_X(EV_MMA_QK_P1);
                 // Release K_{S+1} after both QKs
                 asm volatile(
                     "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
@@ -1943,7 +1977,9 @@ llm_fa_kernel(
 #if SPLIT_P_PV && !SKIP_SM_FULL
                     phase_pls ^= 1 << 0;
 #endif
+                    PROF_BEGIN_X(EV_MMA_PV_P0);
                     ISSUE_PV(0, s_V_last, n_kv == 1, pls_p0);
+                    PROF_END_X(EV_MMA_PV_P0);
                 }
 #if PER_PAIR_DRAIN
                 MMA_PAIR_DRAIN_COMMIT(o_acc_full(0));
@@ -1963,7 +1999,9 @@ llm_fa_kernel(
 #if SPLIT_P_PV && !SKIP_SM_FULL
                     phase_pls ^= 1 << 1;
 #endif
+                    PROF_BEGIN_X(EV_MMA_PV_P1);
                     ISSUE_PV(1, s_V_last, n_kv == 1, pls_p1);
+                    PROF_END_X(EV_MMA_PV_P1);
                 }
 #if PER_PAIR_DRAIN
                 MMA_PAIR_DRAIN_COMMIT(o_acc_full(1));
