@@ -6,7 +6,7 @@
 
 A C++/inline-PTX implementation of FlashAttention forward (BF16, head_dim=128,
 non-causal). On a B200 at NCU-locked clocks, **`llm_fa` trails the stock
-CuTeDSL FA4 reference by ~160 ns per main-loop iteration (ratio 0.94)** at
+CuTeDSL FA4 reference by ~165 ns per main-loop iteration (ratio 0.94)** at
 single-wave shapes — i.e. ~6% slower than FA4 while staying entirely in
 public PTX. Built directly against `tcgen05.mma` / `cp.async.bulk.tensor` /
 `setmaxnreg`.
@@ -31,17 +31,17 @@ clock-locked). Negative = llm_fa is slower per main-loop iter than FA4.
 
 | Shape (q, sk)  | n_kv | llm_fa µs | FA4 µs | FA4/llm_fa | **regression / iter** |
 |---------------:|----:|---:|---:|---:|---:|
-| 16384, 16384   |  128 |  385.3 |  360.6 | 0.936 | **−192.6 ns** |
-| 16384, 32768   |  256 |  733.2 |  686.6 | 0.936 | **−182.4 ns** |
-| 16384, 65536   |  512 | 1380.6 | 1294.6 | 0.938 | **−167.9 ns** |
-| 16384, 131072  | 1024 | 2626.2 | 2451.7 | 0.934 | **−170.4 ns** |
-| 32768, 16384   |  128 |  438.7 |  412.4 | 0.940 | **−205.9 ns** |
-| 32768, 32768   |  256 |  821.1 |  776.1 | 0.945 | **−175.9 ns** |
-| 32768, 65536   |  512 | 1515.3 | 1432.2 | 0.945 | **−162.4 ns** |
-| 32768, 131072  | 1024 | 2809.2 | 2645.3 | 0.942 | **−160.1 ns** |
+| 16384, 16384   |  128 |  379.1 |  353.4 | 0.932 | **−200.5 ns** |
+| 16384, 32768   |  256 |  733.7 |  681.3 | 0.929 | **−204.6 ns** |
+| 16384, 65536   |  512 | 1386.9 | 1285.4 | 0.927 | **−198.3 ns** |
+| 16384, 131072  | 1024 | 2655.2 | 2447.3 | 0.922 | **−203.0 ns** |
+| 32768, 16384   |  128 |  417.6 |  389.0 | 0.931 | **−223.9 ns** |
+| 32768, 32768   |  256 |  779.8 |  735.8 | 0.943 | **−172.1 ns** |
+| 32768, 65536   |  512 | 1446.4 | 1362.0 | 0.942 | **−164.8 ns** |
+| 32768, 131072  | 1024 | 2712.8 | 2544.2 | 0.938 | **−164.7 ns** |
 
-Floor across the sweep: **−160 ns/iter** at q=32768/sk=131072 (the largest
-single-wave shape; ratio 0.942). Asymptote sits at ~−160 to −180 ns/iter;
+Floor across the sweep: **−165 ns/iter** at q=32768/sk=131072 (the largest
+single-wave shape; ratio 0.938). Asymptote sits at ~−165 to −205 ns/iter;
 the gap does not amortize toward zero as n_kv grows. Multi-wave shapes
 (q > 32768) widen the gap to roughly −300 ns/iter because llm_fa runs 1.73
 waves on a 74-cga2 GPU while FA4 is persistent (1 wave).
@@ -55,24 +55,24 @@ B200 has 74 cga2 cluster slots; q ≤ 32768 (= 64 clusters) stays single-wave.
 
 | Shape (q, sk) | n_kv | scaffolding µs | faux µs | **llm_fa µs** | FA4 µs | FA4/llm_fa | ns/iter |
 |--------------:|----:|---:|---:|---:|---:|---:|---:|
-| 16384, 16384  |  128 |  344.6 |  319.1 |  **385.3** |  360.6 | 0.936 | −192.6 |
-| 16384, 32768  |  256 |  658.0 |  606.7 |  **733.2** |  686.6 | 0.936 | −182.4 |
-| 16384, 65536  |  512 | 1242.2 | 1141.0 | **1380.6** | 1294.6 | 0.938 | −167.9 |
-| 16384, 131072 | 1024 | 2363.6 | 2138.3 | **2626.2** | 2451.7 | 0.934 | −170.4 |
-| 32768, 16384  |  128 |  393.9 |  371.6 |  **438.7** |  412.4 | 0.940 | −205.9 |
-| 32768, 32768  |  256 |  743.0 |  696.1 |  **821.1** |  776.1 | 0.945 | −175.9 |
-| 32768, 65536  |  512 | 1375.3 | 1283.2 | **1515.3** | 1432.2 | 0.945 | −162.4 |
-| 32768, 131072 | 1024 | 2538.8 | 2358.3 | **2809.2** | 2645.3 | 0.942 | −160.1 |
+| 16384, 16384  |  128 |  335.9 |  314.4 |  **379.1** |  353.4 | 0.932 | −200.5 |
+| 16384, 32768  |  256 |  653.7 |  605.9 |  **733.7** |  681.3 | 0.929 | −204.6 |
+| 16384, 65536  |  512 | 1245.8 | 1143.9 | **1386.9** | 1285.4 | 0.927 | −198.3 |
+| 16384, 131072 | 1024 | 2381.6 | 2158.3 | **2655.2** | 2447.3 | 0.922 | −203.0 |
+| 32768, 16384  |  128 |  371.1 |  352.2 |  **417.6** |  389.0 | 0.931 | −223.9 |
+| 32768, 32768  |  256 |  700.8 |  657.6 |  **779.8** |  735.8 | 0.943 | −172.1 |
+| 32768, 65536  |  512 | 1305.0 | 1212.9 | **1446.4** | 1362.0 | 0.942 | −164.8 |
+| 32768, 131072 | 1024 | 2446.8 | 2239.1 | **2712.8** | 2544.2 | 0.938 | −164.7 |
 
 Notes:
 - `FA4/llm_fa` is the latency ratio FA4 µs ÷ llm_fa µs (<1 means llm_fa trails FA4).
 - `ns/iter = (FA4 − llm_fa) µs × 1000 / n_kv`; negative means llm_fa is slower per main-loop iter.
-- The per-iter gap plateaus at **−160 to −180 ns/iter** at single-wave shapes;
+- The per-iter gap plateaus at **−165 to −205 ns/iter** at single-wave shapes;
   it does *not* keep amortizing toward zero with larger n_kv.
 
 ## Where the remaining ~6% gap lives
 
-At q=32768/sk=131072 single-wave, the gap is ~163 µs / 1024 iters ≈ 160 ns
+At q=32768/sk=131072 single-wave, the gap is ~169 µs / 1024 iters ≈ 165 ns
 per main-loop iteration. That maps to roughly:
 
 - ~50-100 cycles per iter on `s_p_o_full` `mbarrier.try_wait.parity` — the

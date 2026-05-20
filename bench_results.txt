@@ -2,50 +2,50 @@
 # median of 10 measurements after 3 warmups, µs
 # single-wave shapes on B200 (74 cga2 cluster slots)
 
-  running scaffolding  q=16384 sk= 16384 …    344.6 µs
-  running faux         q=16384 sk= 16384 …    319.1 µs
-  running llm_fa   q=16384 sk= 16384 …    385.3 µs
-  running FA4          q=16384 sk= 16384 …    360.6 µs
-  running scaffolding  q=16384 sk= 32768 …    658.0 µs
-  running faux         q=16384 sk= 32768 …    606.7 µs
-  running llm_fa   q=16384 sk= 32768 …    733.2 µs
-  running FA4          q=16384 sk= 32768 …    686.6 µs
-  running scaffolding  q=16384 sk= 65536 …   1242.2 µs
-  running faux         q=16384 sk= 65536 …   1141.0 µs
-  running llm_fa   q=16384 sk= 65536 …   1380.6 µs
-  running FA4          q=16384 sk= 65536 …   1294.6 µs
-  running scaffolding  q=16384 sk=131072 …   2363.6 µs
-  running faux         q=16384 sk=131072 …   2138.3 µs
-  running llm_fa   q=16384 sk=131072 …   2626.2 µs
-  running FA4          q=16384 sk=131072 …   2451.7 µs
-  running scaffolding  q=32768 sk= 16384 …    393.9 µs
-  running faux         q=32768 sk= 16384 …    371.6 µs
-  running llm_fa   q=32768 sk= 16384 …    438.7 µs
-  running FA4          q=32768 sk= 16384 …    412.4 µs
-  running scaffolding  q=32768 sk= 32768 …    743.0 µs
-  running faux         q=32768 sk= 32768 …    696.1 µs
-  running llm_fa   q=32768 sk= 32768 …    821.1 µs
-  running FA4          q=32768 sk= 32768 …    776.1 µs
-  running scaffolding  q=32768 sk= 65536 …   1375.3 µs
-  running faux         q=32768 sk= 65536 …   1283.2 µs
-  running llm_fa   q=32768 sk= 65536 …   1515.3 µs
-  running FA4          q=32768 sk= 65536 …   1432.2 µs
-  running scaffolding  q=32768 sk=131072 …   2538.8 µs
-  running faux         q=32768 sk=131072 …   2358.3 µs
-  running llm_fa   q=32768 sk=131072 …   2809.2 µs
-  running FA4          q=32768 sk=131072 …   2645.3 µs
+  running scaffolding  q=16384 sk= 16384 …    335.9 µs
+  running faux         q=16384 sk= 16384 …    314.4 µs
+  running llm_fa       q=16384 sk= 16384 …    379.1 µs
+  running FA4          q=16384 sk= 16384 …    353.4 µs
+  running scaffolding  q=16384 sk= 32768 …    653.7 µs
+  running faux         q=16384 sk= 32768 …    605.9 µs
+  running llm_fa       q=16384 sk= 32768 …    733.7 µs
+  running FA4          q=16384 sk= 32768 …    681.3 µs
+  running scaffolding  q=16384 sk= 65536 …   1245.8 µs
+  running faux         q=16384 sk= 65536 …   1143.9 µs
+  running llm_fa       q=16384 sk= 65536 …   1386.9 µs
+  running FA4          q=16384 sk= 65536 …   1285.4 µs
+  running scaffolding  q=16384 sk=131072 …   2381.6 µs
+  running faux         q=16384 sk=131072 …   2158.3 µs
+  running llm_fa       q=16384 sk=131072 …   2655.2 µs
+  running FA4          q=16384 sk=131072 …   2447.3 µs
+  running scaffolding  q=32768 sk= 16384 …    371.1 µs
+  running faux         q=32768 sk= 16384 …    352.2 µs
+  running llm_fa       q=32768 sk= 16384 …    417.6 µs
+  running FA4          q=32768 sk= 16384 …    389.0 µs
+  running scaffolding  q=32768 sk= 32768 …    700.8 µs
+  running faux         q=32768 sk= 32768 …    657.6 µs
+  running llm_fa       q=32768 sk= 32768 …    779.8 µs
+  running FA4          q=32768 sk= 32768 …    735.8 µs
+  running scaffolding  q=32768 sk= 65536 …   1305.0 µs
+  running faux         q=32768 sk= 65536 …   1212.9 µs
+  running llm_fa       q=32768 sk= 65536 …   1446.4 µs
+  running FA4          q=32768 sk= 65536 …   1362.0 µs
+  running scaffolding  q=32768 sk=131072 …   2446.8 µs
+  running faux         q=32768 sk=131072 …   2239.1 µs
+  running llm_fa       q=32768 sk=131072 …   2712.8 µs
+  running FA4          q=32768 sk=131072 …   2544.2 µs
 
 ============================================================================================
-shape               n_kv  scaffolding         faux   llm_fa          FA4   llm_fa/FA4    ns/iter
+shape               n_kv  scaffolding         faux       llm_fa          FA4 llm_fa/FA4    ns/iter
 --------------------------------------------------------------------------------------------
-q16384_sk16384       128        344.6        319.1        385.3        360.6     0.936   -192.6ns
-q16384_sk32768       256        658.0        606.7        733.2        686.6     0.936   -182.4ns
-q16384_sk65536       512       1242.2       1141.0       1380.6       1294.6     0.938   -167.9ns
-q16384_sk131072     1024       2363.6       2138.3       2626.2       2451.7     0.934   -170.4ns
-q32768_sk16384       128        393.9        371.6        438.7        412.4     0.940   -205.9ns
-q32768_sk32768       256        743.0        696.1        821.1        776.1     0.945   -175.9ns
-q32768_sk65536       512       1375.3       1283.2       1515.3       1432.2     0.945   -162.4ns
-q32768_sk131072     1024       2538.8       2358.3       2809.2       2645.3     0.942   -160.1ns
+q16384_sk16384       128        335.9        314.4        379.1        353.4      0.932   -200.5ns
+q16384_sk32768       256        653.7        605.9        733.7        681.3      0.929   -204.6ns
+q16384_sk65536       512       1245.8       1143.9       1386.9       1285.4      0.927   -198.3ns
+q16384_sk131072     1024       2381.6       2158.3       2655.2       2447.3      0.922   -203.0ns
+q32768_sk16384       128        371.1        352.2        417.6        389.0      0.931   -223.9ns
+q32768_sk32768       256        700.8        657.6        779.8        735.8      0.943   -172.1ns
+q32768_sk65536       512       1305.0       1212.9       1446.4       1362.0      0.942   -164.8ns
+q32768_sk131072     1024       2446.8       2239.1       2712.8       2544.2      0.938   -164.7ns
 
 # ratio = FA4 / llm_fa   (1.0 means tied; <1 means we trail FA4)
 # ns/iter = (FA4_us − llm_fa_us) × 1000 / n_kv   (negative = trail)

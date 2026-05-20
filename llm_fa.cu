@@ -67,134 +67,13 @@
 #ifndef ENABLE_PROF
 #define ENABLE_PROF 0
 #endif
-#ifndef EPI_FULL
-// 1 = real epilogue: writes full Sq × D bf16 output via TMEM → reg → gmem.
-// 0 = legacy sentinel: writes 8 fp32 per CTA for quick verification only.
-// Default ON. Legacy path retained behind the flag for apples-to-apples
-// benchmarks against the pre-epi numbers.
-#define EPI_FULL 1
-#endif
-#ifndef MMA_REORDER
-// 0 = legacy schedule (per iter j: Q0K_j, Q1K_j, P0V_j, P1V_j sequential).
-// 1 = pipelined schedule (DEFAULT — saves ~1ms at worst case):
-//        prologue: Q0K_0
-//        step S in [0..n_kv): P1V_{S-1} (S>=1), Q1K_S, P0V_S, Q0K_{S+1} (S+1<n_kv)
-//        epilogue: P1V_{n_kv-1}
-//     Q0K is issued one step before the matching P0V → softmax of pair-0
-//     gets two MMA-issues of overlap window before its PV waits.
-//     Same for pair 1 via the across-step Q1K → P1V offset.
-#define MMA_REORDER 1
-#endif
-#ifndef SKIP_SM_EXP
-// 1 = SM warpgroup skips ALL math (LD S, rowmax, exp2 loop, TMEM-store P)
-// but still drives the mbar protocol so COR runs normally. Used to isolate
-// the latency contribution of the COR rescale path. Result will be wrong;
-// only the timing is meaningful. Defaults to 0 (real softmax).
-#define SKIP_SM_EXP 0
-#endif
-#ifndef USE_EX2_EMU
-// 0 = MUFU.EX2 (XU pipe). 1 = polynomial emulation (FMA pipe — FFMA2/FADD2).
-// 2 = HYBRID matching FA4 ex2_emu_freq=12,res=4 (12.5% poly on FMA pipe, 87.5%
-//     MUFU.EX2 on XU pipe). Offloads ~33% of XU pressure to FMA without
-//     overloading FMA. Default = 2 (FA4-faithful, −130 µs at worst case).
-//     Set USE_EX2_EMU=0 to disable hybrid; USE_EX2_EMU=1 to use 100% poly (regresses).
-#define USE_EX2_EMU 2
-#endif
-// SKIP_SM_FULL=1: WG0/1, WG2, warp 13 fully idle. MMA bypasses s_p_o/o_acc
-//   waits. True TMA+MMA SOL — useful for measuring the pipeline floor.
-#ifndef SKIP_SM1_EXP
-#define SKIP_SM1_EXP 0
-#endif
-#ifndef LSUM_4STREAM
-#define LSUM_4STREAM 1
-#endif
-#ifndef PINGPONG
-#define PINGPONG 0
-#endif
-#ifndef SPLIT_P_ARRIVE
-#define SPLIT_P_ARRIVE 0
-#endif
-#ifndef STREAM_STP
-#define STREAM_STP 1
-#endif
 
-// SM_LEVEL: incremental bisection on top of SKIP_SM_FULL=1 (= pure SOL).
-//   0 = pure SOL (SM body fully disabled)
-//   1 = + LD-S + rowmax + acc_scale + sScale write
-//   2 = + Phase A FFMA2 scale_subtract (register-only)
-//   3 = + Phase B EX2 + cvt + 4-stream FADD2 l_sum + l_state update
-//        (register-only — STTM still gated off)
-//   4 = + STTM to TMEM + mbar arrives (= full integration; race-prone in SOL)
-// SKIP_SM_FULL=0 ignores SM_LEVEL (always runs full kernel).
-#ifndef SM_LEVEL
-#define SM_LEVEL 0
-#endif
-
-// Use FA4-style per-warp-pair named-bar handshake for SM→COR sm_stats signaling
-// instead of mbarrier_arrive/mbarrier_wait. Lighter weight: bar.arrive is ~10
-// cycles, mbarrier_arrive is ~30 cycles + SMEM atomic + parity flip.
-#ifndef USE_NAMED_BAR_SM_STATS
-#define USE_NAMED_BAR_SM_STATS 1
-#endif
-
-// FA4 pattern (flash_fwd_sm100.py:2158 + softmax.py:218): perform the l_partial
-// (row_sum) reduction AS A SEPARATE PHASE after EX2+cvt+STTM, not interleaved
-// with the EX2 loop. Keeps fp32 exp2 values alive in registers across STTM,
-// then reduces them at the end. Removes FMA-pipe pressure from the EX2 phase.
-// Accepts higher register pressure (may spill — FA4 has 57 spill ops here).
-#ifndef LSUM_AT_END
-#define LSUM_AT_END 1
-#endif
-
-// FA4 sm_stats back-pressure wait (flash_fwd_sm100.py:2157
-// pipeline_sm_stats.producer_acquire_w_index_phase). SM waits at end of each
-// iter for COR to have consumed previous-iter stats. Default ON: matches FA4
-// and wins ~40 µs at worst case in current context (post SPLIT_P_PV).
-#ifndef BACKPRESSURE_SM_STATS
-#define BACKPRESSURE_SM_STATS 1
-#endif
-
-// FA4 pipeline_p_lastsplit producer_group = softmax_warps_cluster (4 warps × cta_group=2 = 8).
-// In v8 this defaults to a per-CTA mbar with count=4 (each peer waits independently).
-// Cluster-shared form: count = 4 * CTA_GROUP = 8, each softmax warp arrives on BOTH local
-// and peer mbar (via mapa.shared::cluster). MMA leader on each CTA waits on its local mbar
-// which now counts 4 self + 4 peer arrives. Matches FA4 exactly.
-// 0 = per-CTA count=4 (legacy v8), 1 = cluster-shared count=8 (FA4-faithful).
-#ifndef P_LASTSPLIT_CLUSTER
-#define P_LASTSPLIT_CLUSTER 0
-#endif
-
-// FA4 split_P_arrive (blackwell_helpers.py:529-590 gemm_ptx_partial with
-// mbar_ptr): SM fires s_p_o_empty after first STTM chunk (early — partial P
-// ready); MMA's PV issues first 6 of 8 cga2 MMAs (read first 75% of P), waits
-// inline on p_lastsplit_full mbar (= "all P done"), then issues last 2 MMAs.
-// Enables MMA to start consuming P before SM finishes the full P-store.
-#ifndef SPLIT_P_PV
-#define SPLIT_P_PV 1
-#endif
-
-// PER_PAIR_DRAIN: FA4-style per-pair tcgen05.commit after each pair's final PV
-// (last iter), instead of a single tmem_dealloc commit draining BOTH pairs.
-// Lets the tail epi for pair 0 (warps 0-3, LDTM + scale + cvt + st.gmem.b128)
-// start as soon as pair 0's last PV drains — overlapping with pair 1's PV
-// issue + drain on the MMA critical path. Pair 1 epi (warps 4-7) gated on
-// o_acc_full(1). Replaces the single tmem_dealloc wait with per-pair waits.
-// Default OFF (opt-in). Re-uses existing o_acc_full[Q_STAGE=2] mbars (count=1).
-#ifndef PER_PAIR_DRAIN
-#define PER_PAIR_DRAIN 0
-#endif
 constexpr int PV_MMA_TOTAL  = 8;   // BLOCK_K / MMA_K = 128 / 16
-// Our STREAM_STP writes P in 2 chunks of 32 b32 cols each (first chunk = cols
+// STREAM_STP writes P in 2 chunks of 32 b32 cols each (first chunk = cols
 // 64..95 = first 64 bf16 elements; second = cols 96..127 = last 64 bf16).
 // Each PV MMA reads MMA_K/2=8 b32 cols, so MMAs 0..3 consume first STTM chunk,
 // MMAs 4..7 consume second. SPLIT=4 = "first chunk fully ready" sync point.
 constexpr int PV_MMA_SPLIT  = 4;
-
-// Phase enable gates — each phase activates when SM_LEVEL reaches it OR full kernel.
-#define SM_BODY_ON         (!SKIP_SM_FULL || (SM_LEVEL >= 1))  // LD-S + rowmax
-#define SM_PHASE_A_ON      (!SKIP_SM_FULL || (SM_LEVEL >= 2))  // Phase A FFMA2
-#define SM_PHASE_B_ON      (!SKIP_SM_FULL || (SM_LEVEL >= 3))  // Phase B EX2 + l_sum
-#define SM_INTEGRATION_ON  (!SKIP_SM_FULL || (SM_LEVEL >= 4))  // STTM + mbar arrives
 
 // SM0/SM1 ping-pong critical-section barriers (FA4 paper §3.1.2):
 // Bar 4 = "SM0 done with EX2", bar 5 = "SM1 done with EX2".
@@ -208,9 +87,6 @@ constexpr int PP_BAR_COUNT  = 256;
 // our heavier mbarrier_arrive (atomic counter + parity flip).
 constexpr int BAR_SM_STATS_BASE  = 8;
 constexpr int SM_STATS_BAR_COUNT = 64;
-#ifndef SKIP_SM_FULL
-#define SKIP_SM_FULL 0
-#endif
 #define PROF_PER_WARP_SLOTS 320
 #include "profiler.cuh"
 
@@ -319,22 +195,6 @@ __device__ __forceinline__ void mbarrier_init(int m, int c) {
     asm volatile("mbarrier.init.shared::cta.b64 [%0], %1;" ::"r"(m), "r"(c));
 }
 __device__ __forceinline__ void mbarrier_wait(int mbar_addr, int phase) {
-#ifndef MBAR_WAIT_TESTWAIT
-#define MBAR_WAIT_TESTWAIT 0
-#endif
-#if MBAR_WAIT_TESTWAIT
-    // mbarrier.test_wait — synchronous test, no internal sleep hint. ptxas
-    // emits SYNCS.PHASECHK.TRANS64 (no .TRYWAIT) and no BSSY/BSYNC scoping
-    // around the spin. Use when the producer is expected to be ready already
-    // (avoids the 100-cycle TRYWAIT latency that causes long_scoreboard stalls
-    // on the predicate-dependent branch).
-    asm volatile("{\n\t.reg .pred P1;\n\t"
-                 "LAB_WAIT:\n\t"
-                 "mbarrier.test_wait.parity.shared::cta.b64 P1, [%0], %1;\n\t"
-                 "@P1 bra.uni DONE;\n\t"
-                 "bra.uni LAB_WAIT;\n\t"
-                 "DONE:\n\t}" ::"r"(mbar_addr), "r"(phase));
-#else
     // FA4-faithful: 0x989680 (10 ms) suspendTimeHint — matches blackwell_helpers.py:522.
     // FA4-faithful: no .acquire.cta ordering (relaxed). TMEM ordering handled
     // by explicit tcgen05.fence; SMEM ordering for sm_stats handshake handled
@@ -346,7 +206,6 @@ __device__ __forceinline__ void mbarrier_wait(int mbar_addr, int phase) {
                  "@P1 bra.uni DONE;\n\t"
                  "bra.uni LAB_WAIT;\n\t"
                  "DONE:\n\t}" ::"r"(mbar_addr), "r"(phase), "r"(ticks));
-#endif
 }
 __device__ __forceinline__ void mbarrier_arrive(int mbar_addr) {
     asm volatile("mbarrier.arrive.release.cta.shared::cta.b64 _, [%0];" ::"r"(mbar_addr) : "memory");
@@ -648,7 +507,6 @@ __device__ __forceinline__ void emit_pv(
     constexpr uint64_t v_desc_step = (uint64_t)V_K_BYTES_PER_KC_FS >> 4ULL;
     const int p_base = slot_taddr_pair + 64;
     constexpr int p_step = MMA_K / 2;
-#if SPLIT_P_PV
     #pragma unroll
     for (int kc = 0; kc < PV_MMA_SPLIT; kc++) {
         cga2_mma_ts(O_acc_pair,
@@ -666,17 +524,6 @@ __device__ __forceinline__ void emit_pv(
                     PV_I_DESC,
                     1);
     }
-#else
-    (void)pls_phase;
-    #pragma unroll
-    for (int kc = 0; kc < PV_MMA_TOTAL; kc++) {
-        cga2_mma_ts(O_acc_pair,
-                    p_base + kc * p_step,
-                    v_desc_base + (uint64_t)kc * v_desc_step,
-                    PV_I_DESC,
-                    (first_for_O && kc == 0) ? 0 : 1);
-    }
-#endif
 }
 
 // emit_rescale_O: reverted to baseline. Tried mirroring FA4 (8× LDTM.x16 +
@@ -744,11 +591,7 @@ llm_fa_kernel(
     const __grid_constant__ CUtensorMap Q_tmap,
     const __grid_constant__ CUtensorMap K_tmap,
     const __grid_constant__ CUtensorMap V_tmap,
-#if EPI_FULL
     __nv_bfloat16* O_gmem,
-#else
-    float* O_gmem,
-#endif
     int n_kv,
     ProfEvent* prof_buf,
     int* prof_count) {
@@ -847,10 +690,8 @@ llm_fa_kernel(
             mbarrier_init(s_p_o_empty(s), 8);
         }
         // pipeline_p_lastsplit: producer = softmax warps (4 per stage), consumer = MMA leader.
-        // P_LASTSPLIT_CLUSTER=1: matches FA4 producer_group=softmax_warps_cluster (4*cta_group=8);
-        // each softmax warp arrives on BOTH local and peer mbar via mapa.shared::cluster.
         for (int s = 0; s < Q_STAGE; s++) {
-            mbarrier_init(p_lastsplit_full(s),  P_LASTSPLIT_CLUSTER ? 4 * CTA_GROUP : 4);
+            mbarrier_init(p_lastsplit_full(s),  4);
             mbarrier_init(p_lastsplit_empty(s), 1);
         }
         // pipeline_o_acc: producer = MMA leader (multicast), consumer = correction (4 warps).
@@ -949,7 +790,6 @@ llm_fa_kernel(
         // Sends acc_scale to correction via sScale[stage*M + lane_row].
         // After mainloop, writes l to sScale[Q_STAGE*M + stage*M + lane_row].
         // SCALE_LOG2 = (1/sqrt(D)) * log2(e) = (1/sqrt(128)) * 1.4427 ≈ 0.12748.
-#if SM_BODY_ON
         constexpr float SCALE_LOG2 = 0.12747904f;  // (1/sqrt(128)) * log2(e)
         const bool is_p0 = (warp_id < SOFTMAX1_LO);
         const int pair   = is_p0 ? 0 : 1;
@@ -962,81 +802,13 @@ llm_fa_kernel(
         float l_state = 0.0f;    // running row sum of exp2
         int phase_sr = 0;
         int phase_sse = 0;       // sm_stats_empty back-pressure phase (FA4 pattern)
-#if PINGPONG == 3
-        // FA4 ping-pong init: SM0 starts blocking (phase=1, mbar parity=0 → wait
-        // blocks); SM1 starts non-blocking (phase=0 → returns immediately).
-        // Therefore SM1 enters Phase B first; SM0 follows once SM1's arrive
-        // flips its mbar parity. After EX2, SM0 fires pp_seq[1] (SM1's wake) and
-        // SM1 fires pp_seq[0] (SM0's wake).
-        int pp_phase = is_p0 ? 1 : 0;
-#endif
         for (int j = 0; j < n_kv; j++) {
             PROF_BEGIN_X(EV_SM_WAIT_S);
             mbarrier_wait(s_p_o_full(pair), phase_sr);
             PROF_END_X(EV_SM_WAIT_S);
             phase_sr ^= 1;
-#if SKIP_SM1_EXP
-            // SM1-only bypass: warps 4-7 skip RM/EX2/STP math but keep the mbar
-            // choreography so MMA + COR + pair-0 dependencies are unaffected.
-            // Tests contention hypothesis: 8 SM warps hitting MUFU.EX2 on XU pipe
-            // simultaneously. With SM1 silent, only SM0's 4 warps drive EX2.
-            // Ignore correctness.
-            if (!is_p0) {
-                PROF_BEGIN_X(EV_SM_RM);
-                sScale_ptr[sScale_row] = 1.0f;  // best-case COR (rescale skipped)
-                __syncwarp();
-                if (lane_id == 0) {
-                    mbarrier_arrive(sm_stats_full(pair));
-                }
-                PROF_END_X(EV_SM_RM);
-                PROF_BEGIN_X(EV_SM_EX2);
-                PROF_END_X(EV_SM_EX2);
-                PROF_BEGIN_X(EV_SM_STP);
-                asm volatile("tcgen05.fence::before_thread_sync;");
-                if (lane_id == 0) {
-                    mbarrier_arrive(p_lastsplit_full(pair));
-#if P_LASTSPLIT_CLUSTER
-                    mbarrier_arrive_peer(p_lastsplit_full(pair));
-#endif
-                    mbarrier_arrive(s_p_o_empty(pair));
-                }
-                PROF_END_X(EV_SM_STP);
-                continue;
-            }
-#endif
             asm volatile("tcgen05.fence::after_thread_sync;");
             PROF_BEGIN_X(EV_SM_RM);
-#if SKIP_SM_EXP
-            // Strip ALL SM math; just drive mbar choreography so COR runs.
-            // SKIP_SM_EXP=1: acc_scale = 0.5 → ballot fires every iter, rescale_O
-            //                runs (worst-case COR — what the FIRST few iters look like).
-            // SKIP_SM_EXP=2: acc_scale = 1.0 → ballot empty, rescale_O skips
-            //                (best-case COR — what most iters look like after tau stabilizes).
-  #if SKIP_SM_EXP == 2
-            sScale_ptr[sScale_row] = 1.0f;
-  #else
-            sScale_ptr[sScale_row] = 0.5f;
-  #endif
-            __syncwarp();
-            if (lane_id == 0) {
-                mbarrier_arrive(sm_stats_full(pair));
-            }
-            PROF_END_X(EV_SM_RM);
-            PROF_BEGIN_X(EV_SM_EX2);
-            // (no exp math)
-            PROF_END_X(EV_SM_EX2);
-            PROF_BEGIN_X(EV_SM_STP);
-            asm volatile("tcgen05.fence::before_thread_sync;");
-            if (lane_id == 0) {
-                mbarrier_arrive(p_lastsplit_full(pair));
-#if P_LASTSPLIT_CLUSTER
-                mbarrier_arrive_peer(p_lastsplit_full(pair));
-#endif
-                mbarrier_arrive(s_p_o_empty(pair));
-            }
-            PROF_END_X(EV_SM_STP);
-            continue;
-#endif
 
             // Read S row (128 fp32) from TMEM into registers — keeps R≥128.
             float s[128];
@@ -1058,26 +830,6 @@ llm_fa_kernel(
                     : "r"(addr));
             }
             asm volatile("tcgen05.wait::ld.sync.aligned;");
-
-#if SPLIT_P_ARRIVE
-            // FA4 split_P_arrive (paper §3.1.2 "stage out storing P"): fire
-            // SM's s_p_o_empty arrive AS SOON AS S has been read into registers.
-            // SM no longer needs the S region of TMEM, so we signal MMA early.
-            // s_p_o_empty count=8 (4 SM + 4 COR); SM's 4 arrives land here,
-            // mbar flips when COR's 4 also land (or vice versa).
-            //
-            // SAFETY: v8's TMEM layout has S+P overlapping in slot_p (S = cols
-            // 0..127, P = cols 64..127). Firing s_p_o_empty early lets MMA's
-            // next-iter QK potentially write S_{j+1} to cols 0..127 BEFORE our
-            // current P-store completes. This is the race FA4 avoids with
-            // S_STAGE=2 (separate TMEM slot per iter). We are testing whether
-            // the natural schedule (kv_full(K_{j+1}) dependency, MMA pipeline
-            // ordering) prevents the race in practice on our shapes.
-            asm volatile("tcgen05.fence::before_thread_sync;");
-            if (lane_id == 0) {
-                mbarrier_arrive(s_p_o_empty(pair));
-            }
-#endif
 
             // ----- 1. Compute m_local (max of S) — FA4-style 4-stream parallel reduce -----
             // (utils.py:251 fmax_reduce). 4 independent accumulator chains; ptxas
@@ -1117,41 +869,15 @@ llm_fa_kernel(
             sScale_ptr[sScale_row] = acc_scale;
             // FA4 early arrive: fire sm_stats so COR can rescale O while we compute P.
             __syncwarp();
-#if !SKIP_SM_FULL
             // sm_stats_full has no consumer in pure-SOL build, skip the arrive.
-  #if USE_NAMED_BAR_SM_STATS
             // FA4 pattern (flash_fwd_sm100.py:940 + 2116): per-warp-pair named bar
             // arrive. Each SM warp i of pair p fires bar id 8 + p*4 + i (count 64,
             // = this SM warp + paired COR warp). Lighter than mbarrier_arrive.
             // ALL 32 lanes must execute the bar.arrive (no lane_id==0 gate).
             named_barrier_arrive(BAR_SM_STATS_BASE + pair * 4 + warp_id_local,
                                  SM_STATS_BAR_COUNT);
-  #else
-            if (lane_id == 0) {
-                mbarrier_arrive(sm_stats_full(pair));
-            }
-  #endif
-#endif
             // End of RM phase: this is the "early COR trigger" point.
             PROF_END_X(EV_SM_RM);
-
-#if SM_LEVEL == 1 && SKIP_SM_FULL
-            // SOL+RM build-up: rowmax done, skip Phase A/B/STTM/l_sum entirely.
-            // No mbar arrives needed — all consumers (COR/EPI/MMA-side waits) off.
-            continue;
-#endif
-
-#if PINGPONG == 1
-            // SM0/SM1 ping-pong (wide CS: covers Phase A FFMA2 + Phase B EX2).
-            // FA4 paper §3.1.2. Bar count=256 across all 8 SM warps.
-            PROF_BEGIN_X(EV_PP_WAIT);
-            if (is_p0) {
-                if (j > 0) named_barrier_sync(BAR_SM1_DONE, PP_BAR_COUNT);
-            } else {
-                named_barrier_sync(BAR_SM0_DONE, PP_BAR_COUNT);
-            }
-            PROF_END_X(EV_PP_WAIT);
-#endif
 
             // ----- 4. Compute P = exp2(S * scale_log2 - m_new) and l_partial -----
             // FA4 pattern (softmax.py:223 scale_subtract_rowmax + 237 apply_exp2_convert):
@@ -1163,7 +889,6 @@ llm_fa_kernel(
             float l_new = acc_scale * l_state;
             uint32_t pp[64];
             const float neg_m_new = -m_new;
-#if SM_PHASE_A_ON
             // Phase A: 64× fma.rn.ftz.f32x2 — scale all 128 elements in place.
             #pragma unroll
             for (int i = 0; i < 64; i++) {
@@ -1178,40 +903,6 @@ llm_fa_kernel(
                     : "+f"(s[2*i]), "+f"(s[2*i+1])
                     : "f"(SCALE_LOG2), "f"(neg_m_new));
             }
-#endif
-#if !SM_PHASE_B_ON
-            // SM_LEVEL=2 stop: Phase A done, skip Phase B/STTM/mbars.
-            // Prevent ptxas from DCE'ing s[] (only output of Phase A).
-            asm volatile("" : : "f"(s[0]), "f"(s[63]), "f"(s[127]) : "memory");
-            PROF_END_X(EV_SM_EX2);
-            PROF_BEGIN_X(EV_SM_STP);
-            PROF_END_X(EV_SM_STP);
-            continue;
-#endif
-#if PINGPONG == 2
-            // SM0/SM1 ping-pong (narrow CS: ONLY Phase B EX2 + FADD2; Phase A FFMA2
-            // stays parallel). FA4 source pattern (flash_fwd_sm100.py:2119-2138).
-            PROF_BEGIN_X(EV_PP_WAIT);
-            if (is_p0) {
-                if (j > 0) named_barrier_sync(BAR_SM1_DONE, PP_BAR_COUNT);
-            } else {
-                named_barrier_sync(BAR_SM0_DONE, PP_BAR_COUNT);
-            }
-            PROF_END_X(EV_PP_WAIT);
-#endif
-#if PINGPONG == 3
-            // Mbar-based pingpong (FA4 exact pattern, flash_fwd_sm100.py:2122).
-            // SM0 waits pp_seq[0] (SM1 arrives there); SM1 waits pp_seq[1].
-            // 1-thread arrive vs bar.sync's 256-thread rendezvous = ~10x lighter.
-            PROF_BEGIN_X(EV_PP_WAIT);
-            if (is_p0) {
-                mbarrier_wait(pp_seq(0), pp_phase);
-            } else {
-                mbarrier_wait(pp_seq(1), pp_phase);
-            }
-            pp_phase ^= 1;
-            PROF_END_X(EV_PP_WAIT);
-#endif
 
             // Phase B: exp2 + cvt to bf16x2 + accumulate.
             //
@@ -1229,19 +920,13 @@ llm_fa_kernel(
                 asm volatile("ex2.approx.ftz.f32 %0, %1;" : "+f"(A) : "f"(A));     \
                 asm volatile("ex2.approx.ftz.f32 %0, %1;" : "+f"(B) : "f"(B));     \
             } while (0)
-#if USE_EX2_EMU == 1
-            #define LSUM_EX2_PAIR(A, B) ex2_poly_pair((A), (B))
-#else
             #define LSUM_EX2_PAIR(A, B) MUFU_EX2_PAIR(A, B)
-#endif
-#if LSUM_4STREAM
             // 4-stream packed FADD2 accumulator (matches FA4 softmax.py:280-ish
             // l_partial reduction pattern, FA4 SASS lines 4015-4143).
             // Replaces 128-deep scalar FADD chain with 64 FADD2 across 4 independent
             // streams + 3-element reduction tree. Cuts FMA-pipe op count ~2× and
             // breaks the serial dep chain so MUFU.EX2 latency can overlap.
             float l_acc[8] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
-#if LSUM_AT_END
             // FA4-pattern bodies: EX2 + cvt only. Write back exp2(s) to s[] for
             // the late l_partial reduction. No inline LSUM_ADD2.
             #define LSUM_BODY(g_)                                                  \
@@ -1282,48 +967,6 @@ llm_fa_kernel(
                     s[(g_)*8 + 4] = a2; s[(g_)*8 + 5] = b2;                        \
                     s[(g_)*8 + 6] = a3; s[(g_)*8 + 7] = b3;                        \
                 }
-#else
-            #define LSUM_BODY(g_)                                                  \
-                {                                                                  \
-                    float a0 = s[(g_)*8 + 0], b0 = s[(g_)*8 + 1];                  \
-                    float a1 = s[(g_)*8 + 2], b1 = s[(g_)*8 + 3];                  \
-                    float a2 = s[(g_)*8 + 4], b2 = s[(g_)*8 + 5];                  \
-                    float a3 = s[(g_)*8 + 6], b3 = s[(g_)*8 + 7];                  \
-                    LSUM_EX2_PAIR(a0, b0);                                         \
-                    LSUM_EX2_PAIR(a1, b1);                                         \
-                    LSUM_EX2_PAIR(a2, b2);                                         \
-                    LSUM_EX2_PAIR(a3, b3);                                         \
-                    LSUM_ADD2(l_acc[0], l_acc[1], a0, b0);                         \
-                    LSUM_ADD2(l_acc[2], l_acc[3], a1, b1);                         \
-                    LSUM_ADD2(l_acc[4], l_acc[5], a2, b2);                         \
-                    LSUM_ADD2(l_acc[6], l_acc[7], a3, b3);                         \
-                    asm volatile("cvt.rn.bf16x2.f32 %0, %2, %1;" : "=r"(pp[(g_)*4+0]) : "f"(a0), "f"(b0));\
-                    asm volatile("cvt.rn.bf16x2.f32 %0, %2, %1;" : "=r"(pp[(g_)*4+1]) : "f"(a1), "f"(b1));\
-                    asm volatile("cvt.rn.bf16x2.f32 %0, %2, %1;" : "=r"(pp[(g_)*4+2]) : "f"(a2), "f"(b2));\
-                    asm volatile("cvt.rn.bf16x2.f32 %0, %2, %1;" : "=r"(pp[(g_)*4+3]) : "f"(a3), "f"(b3));\
-                }
-            // Hybrid body: 3 MUFU pairs + 1 poly pair (pair-3 = "tail" of group),
-            // used in middle groups (4..11) under USE_EX2_EMU == 2.
-            #define LSUM_BODY_MIXED(g_)                                            \
-                {                                                                  \
-                    float a0 = s[(g_)*8 + 0], b0 = s[(g_)*8 + 1];                  \
-                    float a1 = s[(g_)*8 + 2], b1 = s[(g_)*8 + 3];                  \
-                    float a2 = s[(g_)*8 + 4], b2 = s[(g_)*8 + 5];                  \
-                    float a3 = s[(g_)*8 + 6], b3 = s[(g_)*8 + 7];                  \
-                    MUFU_EX2_PAIR(a0, b0);                                         \
-                    MUFU_EX2_PAIR(a1, b1);                                         \
-                    MUFU_EX2_PAIR(a2, b2);                                         \
-                    ex2_poly_pair(a3, b3);                                         \
-                    LSUM_ADD2(l_acc[0], l_acc[1], a0, b0);                         \
-                    LSUM_ADD2(l_acc[2], l_acc[3], a1, b1);                         \
-                    LSUM_ADD2(l_acc[4], l_acc[5], a2, b2);                         \
-                    LSUM_ADD2(l_acc[6], l_acc[7], a3, b3);                         \
-                    asm volatile("cvt.rn.bf16x2.f32 %0, %2, %1;" : "=r"(pp[(g_)*4+0]) : "f"(a0), "f"(b0));\
-                    asm volatile("cvt.rn.bf16x2.f32 %0, %2, %1;" : "=r"(pp[(g_)*4+1]) : "f"(a1), "f"(b1));\
-                    asm volatile("cvt.rn.bf16x2.f32 %0, %2, %1;" : "=r"(pp[(g_)*4+2]) : "f"(a2), "f"(b2));\
-                    asm volatile("cvt.rn.bf16x2.f32 %0, %2, %1;" : "=r"(pp[(g_)*4+3]) : "f"(a3), "f"(b3));\
-                }
-#endif
             #define LSUM_ADD2(LO, HI, A, B)                                        \
                 asm("{ .reg .b64 p, r;\n\t"                                        \
                     "mov.b64 p, {%2, %3};\n\t"                                     \
@@ -1331,13 +974,11 @@ llm_fa_kernel(
                     "add.f32x2 r, r, p;\n\t"                                       \
                     "mov.b64 {%0, %1}, r;\n\t}"                                    \
                     : "+f"(LO), "+f"(HI) : "f"(A), "f"(B))
-#if STREAM_STP
             // Stream P-store: split the 16-group EX2 loop into two 8-group halves
             // with a tcgen05.st fired between them. The first store can drain in
             // the TMEM async pipeline while groups 8..15 compute, and the second
             // store can drain in parallel with the reduction tree + l_state update.
             // Matches FA4 SASS pattern (MUFU.EX2 → F2FP.BF16.F32.PACK_AB → STTM.x16).
-  #if USE_EX2_EMU == 2
             // Hybrid: groups 0-3 all-MUFU, 4-7 mixed (1 poly per group), then STTM,
             // 8-11 mixed, 12-15 all-MUFU, then STTM. Mirrors FA4's
             // start_frg=1, end_frg=frg_cnt-1 layout.
@@ -1345,9 +986,7 @@ llm_fa_kernel(
             for (int g = 0;  g < 4;  g++) { LSUM_BODY(g); }
             #pragma unroll
             for (int g = 4;  g < 8;  g++) { LSUM_BODY_MIXED(g); }
-    #if SM_INTEGRATION_ON
             tcgen05_st_32x32b_x32(row_addr + 64, &pp[0]);
-      #if SPLIT_P_PV
             // FA4 split_P_arrive: fence the first STTM, fire s_p_o_empty early
             // (partial P ready for MMA's PV first 4 MMAs). count=8 (4 SM + 4 COR);
             // SM's 4 arrives land here, mbar flips when COR's 4 also land.
@@ -1355,48 +994,11 @@ llm_fa_kernel(
             if (lane_id == 0) {
                 mbarrier_arrive(s_p_o_empty(pair));
             }
-      #endif
-    #endif
             #pragma unroll
             for (int g = 8;  g < 12; g++) { LSUM_BODY_MIXED(g); }
             #pragma unroll
             for (int g = 12; g < 16; g++) { LSUM_BODY(g); }
-    #if SM_INTEGRATION_ON
             tcgen05_st_32x32b_x32(row_addr + 96, &pp[32]);
-    #endif
-  #else
-            #pragma unroll
-            for (int g = 0; g < 8; g++) { LSUM_BODY(g); }
-    #if SM_INTEGRATION_ON
-            // Fire chunk-0 STTM (pp[0..31] → row_addr + 64)
-            tcgen05_st_32x32b_x32(row_addr + 64, &pp[0]);
-      #if SPLIT_P_PV
-            asm volatile("tcgen05.fence::before_thread_sync;");
-            if (lane_id == 0) {
-                mbarrier_arrive(s_p_o_empty(pair));
-            }
-      #endif
-    #endif
-            #pragma unroll
-            for (int g = 8; g < 16; g++) { LSUM_BODY(g); }
-    #if SM_INTEGRATION_ON
-            // Fire chunk-1 STTM (pp[32..63] → row_addr + 96)
-            tcgen05_st_32x32b_x32(row_addr + 96, &pp[32]);
-    #endif
-  #endif
-#else
-  #if USE_EX2_EMU == 2
-            #pragma unroll
-            for (int g = 0;  g < 4;  g++) { LSUM_BODY(g); }
-            #pragma unroll
-            for (int g = 4;  g < 12; g++) { LSUM_BODY_MIXED(g); }
-            #pragma unroll
-            for (int g = 12; g < 16; g++) { LSUM_BODY(g); }
-  #else
-            #pragma unroll
-            for (int g = 0; g < 16; g++) { LSUM_BODY(g); }
-  #endif
-#endif
             #undef LSUM_BODY
             #undef LSUM_BODY_MIXED
             #undef LSUM_ADD2
@@ -1410,7 +1012,6 @@ llm_fa_kernel(
                     "add.f32x2 r, r, p;\n\t"                                       \
                     "mov.b64 {%0, %1}, r;\n\t}"                                    \
                     : "+f"(LO), "+f"(HI) : "f"(A), "f"(B))
-#if LSUM_AT_END
             // FA4-pattern late l_partial reduction: read exp2 values back from s[]
             // (which now holds Phase B outputs) and reduce with 4 packed streams.
             // Matches FA4 fadd_reduce ([utils.py:302-339]) called from
@@ -1422,66 +1023,17 @@ llm_fa_kernel(
                 LSUM_ADD2(l_acc[4], l_acc[5], s[i*8 + 4], s[i*8 + 5]);
                 LSUM_ADD2(l_acc[6], l_acc[7], s[i*8 + 6], s[i*8 + 7]);
             }
-#endif
             LSUM_ADD2(l_acc[0], l_acc[1], l_acc[2], l_acc[3]);
             LSUM_ADD2(l_acc[4], l_acc[5], l_acc[6], l_acc[7]);
             LSUM_ADD2(l_acc[0], l_acc[1], l_acc[4], l_acc[5]);
             #undef LSUM_ADD2
             // Scalar tail: l_new already = acc_scale * l_state (line 720).
             l_new = l_new + l_acc[0] + l_acc[1];
-#else
-            #pragma unroll
-            for (int i = 0; i < 64; i++) {
-                float a = s[2*i];
-                float b = s[2*i+1];
-                asm volatile("ex2.approx.ftz.f32 %0, %1;" : "+f"(a) : "f"(a));
-                asm volatile("ex2.approx.ftz.f32 %0, %1;" : "+f"(b) : "f"(b));
-                l_new += a + b;
-                asm volatile("cvt.rn.bf16x2.f32 %0, %2, %1;"
-                    : "=r"(pp[i]) : "f"(a), "f"(b));
-            }
-#endif
             m_state = m_new;
             l_state = l_new;
             PROF_END_X(EV_SM_EX2);
 
-#if PINGPONG == 1 || PINGPONG == 2
-            // Release our partner via named bar (count=256 rendezvous, heavyweight).
-            PROF_BEGIN_X(EV_PP_ARRIVE);
-            if (is_p0) {
-                named_barrier_arrive(BAR_SM0_DONE, PP_BAR_COUNT);
-            } else {
-                named_barrier_arrive(BAR_SM1_DONE, PP_BAR_COUNT);
-            }
-            PROF_END_X(EV_PP_ARRIVE);
-#endif
-#if PINGPONG == 3
-            // Release partner via mbar (1-thread arrive). FA4 fires from a single
-            // elected lane; here we use lane 0 of any warp in the warpgroup —
-            // lightweight since mbar arrive_count=1 and only one lane contributes.
-            // SM0 arrives pp_seq[1] (SM1's wake); SM1 arrives pp_seq[0] (SM0's wake).
-            PROF_BEGIN_X(EV_PP_ARRIVE);
-            if (lane_id == 0 && warp_id_local == 0) {
-                if (is_p0) {
-                    mbarrier_arrive(pp_seq(1));
-                } else {
-                    mbarrier_arrive(pp_seq(0));
-                }
-            }
-            PROF_END_X(EV_PP_ARRIVE);
-#endif
-
             PROF_BEGIN_X(EV_SM_STP);
-#if SM_INTEGRATION_ON
-  #if !STREAM_STP
-            // Write P to TMEM at offset +64 from S region (FA4 tmem_p_offset).
-            #pragma unroll
-            for (int chunk = 1; chunk >= 0; chunk--) {
-                const int addr = row_addr + 64 + chunk * 32;
-                uint32_t* base = &pp[chunk * 32];
-                tcgen05_st_32x32b_x32(addr, base);
-            }
-  #endif
             // P stores fired (either batched here or streamed mid/end-EX2).
             asm volatile("tcgen05.wait::st.sync.aligned;");
             asm volatile("tcgen05.fence::before_thread_sync;");
@@ -1493,34 +1045,20 @@ llm_fa_kernel(
             // (in the LSUM_4STREAM block) — skip it here too.
             if (lane_id == 0) {
                 mbarrier_arrive(p_lastsplit_full(pair));
-  #if P_LASTSPLIT_CLUSTER
-                mbarrier_arrive_peer(p_lastsplit_full(pair));
-  #endif
-  #if !SPLIT_P_ARRIVE && !SPLIT_P_PV
-                mbarrier_arrive(s_p_o_empty(pair));
-  #endif
             }
-#else
-            // SOL+SM math build-up: prevent ptxas from DCE'ing the SM math loop
-            // outputs (l_state and pp[]) that nothing else reads.
-            asm volatile("" : : "f"(l_state), "r"(pp[0]), "r"(pp[31]), "r"(pp[63]) : "memory");
-#endif
             PROF_END_X(EV_SM_STP);
 
-#if !SKIP_SM_FULL && BACKPRESSURE_SM_STATS
             // FA4 pattern (flash_fwd_sm100.py:2157):
             // pipeline_sm_stats.producer_acquire_w_index_phase — back-pressure on
             // sm_stats slot. SM waits for COR to have consumed previous-iter stats
             // before this iter ends.
             mbarrier_wait(sm_stats_empty(pair), phase_sse);
             phase_sse ^= 1;
-#endif
         }
         // ----- After mainloop: write final l_state to sScale for EPI/COR -----
         // Layout: sScale[Q_STAGE * M_PER_CTA + pair * M_PER_CTA + lane_row]
         sScale_ptr[Q_STAGE * M_PER_CTA + sScale_row] = l_state;
         asm volatile("fence.proxy.async;");  // make smem write visible
-#endif
 
     } else if (warp_id < CORR_HI) {
         // ============================================================
@@ -1529,7 +1067,6 @@ llm_fa_kernel(
         // Per iter, for each pair: read scale from sScale[pair*M + lane_row],
         // LD/multiply/ST O TMEM in 8 chunks of 16 cols (matches cuDNN's
         // LDTM.x8 + FMUL2 + STTM.x8 pattern with paired LDs per chunk).
-#if !SKIP_SM_FULL
         const int warp_id_local = warp_id - CORR_LO;  // 0..3
         const int o_addr_p0 = O_acc_p0 + ((warp_id_local * 32) << 16);
         const int o_addr_p1 = O_acc_p1 + ((warp_id_local * 32) << 16);
@@ -1550,13 +1087,9 @@ llm_fa_kernel(
             // gating on s_p_o_empty.
             // PAIR 0 region: wait sm_stats(0), rescale O for pair 0, fire pair-0 mbars.
             PROF_BEGIN_X(EV_COR_WAIT_O);
-#if USE_NAMED_BAR_SM_STATS
             // Per-warp named-bar handshake with SM warp_id_local of pair 0.
             named_barrier_sync(BAR_SM_STATS_BASE + 0 * 4 + warp_id_local,
                                SM_STATS_BAR_COUNT);
-#else
-            mbarrier_wait(sm_stats_full(0), phase_ss0); phase_ss0 ^= 1;
-#endif
             asm volatile("tcgen05.fence::after_thread_sync;");
             const float scale_p0 = sScale_ptr[0 * M_PER_CTA + sScale_row];
             const unsigned mask_p0 = __ballot_sync(0xFFFFFFFFu, scale_p0 < 1.0f);
@@ -1564,20 +1097,14 @@ llm_fa_kernel(
             asm volatile("tcgen05.fence::before_thread_sync;");
             if (lane_id == 0) {
                 mbarrier_arrive(s_p_o_empty(0));
-#if BACKPRESSURE_SM_STATS
                 mbarrier_arrive(sm_stats_empty(0));
-#endif
             }
             PROF_END_X(EV_COR_WAIT_O);
 
             // PAIR 1 region: wait sm_stats(1), rescale O for pair 1, fire pair-1 mbars.
             PROF_BEGIN_X(EV_COR_WAIT_O1);
-#if USE_NAMED_BAR_SM_STATS
             named_barrier_sync(BAR_SM_STATS_BASE + 1 * 4 + warp_id_local,
                                SM_STATS_BAR_COUNT);
-#else
-            mbarrier_wait(sm_stats_full(1), phase_ss1); phase_ss1 ^= 1;
-#endif
             asm volatile("tcgen05.fence::after_thread_sync;");
             const float scale_p1 = sScale_ptr[1 * M_PER_CTA + sScale_row];
             const unsigned mask_p1 = __ballot_sync(0xFFFFFFFFu, scale_p1 < 1.0f);
@@ -1585,9 +1112,7 @@ llm_fa_kernel(
             asm volatile("tcgen05.fence::before_thread_sync;");
             if (lane_id == 0) {
                 mbarrier_arrive(s_p_o_empty(1));
-#if BACKPRESSURE_SM_STATS
                 mbarrier_arrive(sm_stats_empty(1));
-#endif
             }
             PROF_END_X(EV_COR_WAIT_O1);
             (void)phase_oa0; (void)phase_oa1;  // unused now
@@ -1597,7 +1122,6 @@ llm_fa_kernel(
             mbarrier_arrive(o_epi_full(0));
             mbarrier_arrive(o_epi_full(1));
         }
-#endif
 
     } else if (warp_id == MMA_WARP) {
         // ============================================================
@@ -1618,97 +1142,6 @@ llm_fa_kernel(
             PROF_END_X(EV_MMA_WAIT_Q);
             asm volatile("tcgen05.fence::after_thread_sync;");
 
-#if MMA_REORDER == 0
-            // Per iter j: K[j] @ stage (2j)%6, V[j] @ stage (2j+1)%6.
-            // Order:  wait K_j → QK_p0 + QK_p1 → wait V_j → wait p_lastsplit_p0
-            //         → PV_p0 → wait p_lastsplit_p1 → PV_p1
-            // Slot release: kv_empty(K_stage) after QK done, kv_empty(V_stage) after PV done.
-            for (int j = 0; j < n_kv; j++) {
-                const int s_K = (2*j    ) % KV_STAGE;
-                const int s_V = (2*j + 1) % KV_STAGE;
-
-                PROF_BEGIN_X(EV_MMA_WAIT_K);
-                mbarrier_wait(kv_full(s_K), (phase_kv_full >> s_K) & 1);
-                phase_kv_full ^= 1 << s_K;
-                PROF_END_X(EV_MMA_WAIT_K);
-
-                PROF_BEGIN_X(EV_MMA_QK_P0);
-                ISSUE_QK(0, s_K);
-                PROF_END_X(EV_MMA_QK_P0);
-                PROF_BEGIN_X(EV_MMA_QK_P1);
-                ISSUE_QK(1, s_K);
-                PROF_END_X(EV_MMA_QK_P1);
-
-                // Release K stage as soon as both QK MMAs are committed.
-                // tcgen05.commit waits for prior tcgen05 ops to drain, then
-                // fires kv_empty(s_K) on BOTH peer CTAs' mbars (multicast).
-                asm volatile(
-                    "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
-                    ".multicast::cluster.b64 [%0], %1;" ::
-                        "r"(kv_empty(s_K)), "h"(cta_mask) : "memory");
-
-                PROF_BEGIN_X(EV_MMA_WAIT_V);
-                mbarrier_wait(kv_full(s_V), (phase_kv_full >> s_V) & 1);
-                phase_kv_full ^= 1 << s_V;
-                PROF_END_X(EV_MMA_WAIT_V);
-
-                // Wait for THIS iter's softmax (P ready) AND correction (O
-                // rescaled) before PV. s_p_o_empty fires after both softmax (4
-                // arrives) and COR (4 arrives) per pair = count 8 → 0. Reading
-                // the RESCALED O before PV adds new contribution gives correct
-                // online softmax math (FA4 flash_fwd_sm100.py:1648 pattern).
-#if !SKIP_SM_FULL
-                PROF_BEGIN_X(EV_MMA_WAIT_PR0);
-                mbarrier_wait(s_p_o_empty(0),     (phase_spe >> 0) & 1); phase_spe ^= 1 << 0;
-  #if !SPLIT_P_PV
-                mbarrier_wait(p_lastsplit_full(0), (phase_pls >> 0) & 1); phase_pls ^= 1 << 0;
-  #endif
-                PROF_END_X(EV_MMA_WAIT_PR0);
-#endif
-                {
-                    int pls_p0 = (phase_pls >> 0) & 1;
-#if SPLIT_P_PV && !SKIP_SM_FULL
-                    phase_pls ^= 1 << 0;
-#endif
-                    PROF_BEGIN_X(EV_MMA_PV_P0);
-                    ISSUE_PV(0, s_V, j == 0, pls_p0);
-                    PROF_END_X(EV_MMA_PV_P0);
-                }
-#if PER_PAIR_DRAIN
-                if (j + 1 == n_kv) {
-                    MMA_PAIR_DRAIN_COMMIT(o_acc_full(0));
-                }
-#endif
-#if !SKIP_SM_FULL
-                PROF_BEGIN_X(EV_MMA_WAIT_PR1);
-                mbarrier_wait(s_p_o_empty(1),     (phase_spe >> 1) & 1); phase_spe ^= 1 << 1;
-  #if !SPLIT_P_PV
-                mbarrier_wait(p_lastsplit_full(1), (phase_pls >> 1) & 1); phase_pls ^= 1 << 1;
-  #endif
-                PROF_END_X(EV_MMA_WAIT_PR1);
-#endif
-                {
-                    int pls_p1 = (phase_pls >> 1) & 1;
-#if SPLIT_P_PV && !SKIP_SM_FULL
-                    phase_pls ^= 1 << 1;
-#endif
-                    PROF_BEGIN_X(EV_MMA_PV_P1);
-                    ISSUE_PV(1, s_V, j == 0, pls_p1);
-                    PROF_END_X(EV_MMA_PV_P1);
-                }
-#if PER_PAIR_DRAIN
-                if (j + 1 == n_kv) {
-                    MMA_PAIR_DRAIN_COMMIT(o_acc_full(1));
-                }
-#endif
-
-                // Release V stage after both PVs committed.
-                asm volatile(
-                    "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
-                    ".multicast::cluster.b64 [%0], %1;" ::
-                        "r"(kv_empty(s_V)), "h"(cta_mask) : "memory");
-            }
-#elif MMA_REORDER == 1
             // Pipelined schedule:
             //   prologue: wait K_0 → Q0K_0
             //   step S in [0..n_kv): P1V_{S-1} (S>=1), Q1K_S, P0V_S, Q0K_{S+1}
@@ -1751,18 +1184,11 @@ llm_fa_kernel(
 
                 // 1. P1V_{S-1} (if S>=1). V_{S-1} was waited at step S-1.
                 if (S >= 1) {
-#if !SKIP_SM_FULL
                     PROF_BEGIN_X(EV_MMA_WAIT_PR1);
                     mbarrier_wait(s_p_o_empty(1),     (phase_spe >> 1) & 1); phase_spe ^= 1 << 1;
-  #if !SPLIT_P_PV
-                    mbarrier_wait(p_lastsplit_full(1), (phase_pls >> 1) & 1); phase_pls ^= 1 << 1;
-  #endif
                     PROF_END_X(EV_MMA_WAIT_PR1);
-#endif
                     int pls_p1 = (phase_pls >> 1) & 1;
-#if SPLIT_P_PV && !SKIP_SM_FULL
                     phase_pls ^= 1 << 1;
-#endif
                     PROF_BEGIN_X(EV_MMA_PV_P1);
                     ISSUE_PV(1, s_V_prev, false, pls_p1);
                     PROF_END_X(EV_MMA_PV_P1);
@@ -1790,29 +1216,14 @@ llm_fa_kernel(
                 mbarrier_wait(kv_full(s_V_S), (phase_kv_full >> s_V_S) & 1);
                 phase_kv_full ^= 1 << s_V_S;
                 PROF_END_X(EV_MMA_WAIT_V);
-#if !SKIP_SM_FULL
                 PROF_BEGIN_X(EV_MMA_WAIT_PR0);
                 mbarrier_wait(s_p_o_empty(0),     (phase_spe >> 0) & 1); phase_spe ^= 1 << 0;
-  #if !SPLIT_P_PV
-                mbarrier_wait(p_lastsplit_full(0), (phase_pls >> 0) & 1); phase_pls ^= 1 << 0;
-  #endif
                 PROF_END_X(EV_MMA_WAIT_PR0);
-#endif
                 int pls_p0 = (phase_pls >> 0) & 1;
-#if SPLIT_P_PV && !SKIP_SM_FULL
                 phase_pls ^= 1 << 0;
-#endif
                 PROF_BEGIN_X(EV_MMA_PV_P0);
                 ISSUE_PV(0, s_V_S, S == 0, pls_p0);
                 PROF_END_X(EV_MMA_PV_P0);
-#if PER_PAIR_DRAIN
-                // Pair 0 final PV (last loop iter) → fire o_acc_full(0) so tail
-                // epi for pair 0 (warps 0-3) can start while pair 1's PV is
-                // still in-flight in the epilogue block below.
-                if (S + 1 == n_kv) {
-                    MMA_PAIR_DRAIN_COMMIT(o_acc_full(0));
-                }
-#endif
 
                 // 4. Q0K_{S+1} (if not last iter) — wait K_{S+1} then issue.
                 if (S + 1 < n_kv) {
@@ -1830,208 +1241,34 @@ llm_fa_kernel(
             // Epilogue: P1V_{n_kv-1}
             {
                 const int s_V_last = (2 * (n_kv - 1) + 1) % KV_STAGE;
-#if !SKIP_SM_FULL
                 PROF_BEGIN_X(EV_MMA_WAIT_PR1);
                 mbarrier_wait(s_p_o_empty(1),     (phase_spe >> 1) & 1); phase_spe ^= 1 << 1;
-  #if !SPLIT_P_PV
-                mbarrier_wait(p_lastsplit_full(1), (phase_pls >> 1) & 1); phase_pls ^= 1 << 1;
-  #endif
                 PROF_END_X(EV_MMA_WAIT_PR1);
-#endif
                 int pls_p1 = (phase_pls >> 1) & 1;
-#if SPLIT_P_PV && !SKIP_SM_FULL
                 phase_pls ^= 1 << 1;
-#endif
                 PROF_BEGIN_X(EV_MMA_PV_P1);
                 ISSUE_PV(1, s_V_last, n_kv == 1, pls_p1);
                 PROF_END_X(EV_MMA_PV_P1);
-#if PER_PAIR_DRAIN
-                // Pair 1 final PV → o_acc_full(1). This is also the all-MMA
-                // drain (last tcgen05 op on the queue). Combined with the V_last
-                // kv_empty commit below, no separate tmem_dealloc commit is
-                // needed in the PER_PAIR_DRAIN path.
-                MMA_PAIR_DRAIN_COMMIT(o_acc_full(1));
-#endif
                 asm volatile(
                     "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
                     ".multicast::cluster.b64 [%0], %1;" ::
                         "r"(kv_empty(s_V_last)), "h"(cta_mask) : "memory");
             }
-#elif MMA_REORDER == 2
-            // FA4-faithful per-stage schedule (flash_fwd_sm100.py:1577-1632).
-            // Within iter i, per-stage interleave: PV_s, K_wait (s=0 only),
-            // QK_s_{i+1}, V_release (s=1 only), commit.
-            //   prologue: Q0K_0, Q1K_0 (both pair softmaxes start in parallel)
-            //   loop iter i in [0, n_kv-1):
-            //     wait V_i
-            //     stage 0: PV_0_i, wait K_{i+1}, Q0K_{i+1}
-            //     stage 1: PV_1_i, release V_i, Q1K_{i+1}
-            //     release K_{i+1}
-            //   epilogue: wait V_{n_kv-1}, PV_0_{n_kv-1}, PV_1_{n_kv-1}, release V_{n_kv-1}
-            {
-                const int s_K0 = 0;
-                PROF_BEGIN_X(EV_MMA_WAIT_K);
-                mbarrier_wait(kv_full(s_K0), (phase_kv_full >> s_K0) & 1);
-                phase_kv_full ^= 1 << s_K0;
-                PROF_END_X(EV_MMA_WAIT_K);
-                PROF_BEGIN_X(EV_MMA_QK_P0);
-                ISSUE_QK(0, s_K0);
-                PROF_END_X(EV_MMA_QK_P0);
-                PROF_BEGIN_X(EV_MMA_QK_P1);
-                ISSUE_QK(1, s_K0);
-                PROF_END_X(EV_MMA_QK_P1);
-                asm volatile(
-                    "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
-                    ".multicast::cluster.b64 [%0], %1;" ::
-                        "r"(kv_empty(s_K0)), "h"(cta_mask) : "memory");
-            }
-
-            // Main loop: n_kv - 1 iters. Each issues 2 PVs (current iter) + 2 QKs (next iter).
-            for (int S = 0; S + 1 < n_kv; S++) {
-                const int s_V_S    = (2 * S + 1) % KV_STAGE;
-                const int s_K_next = (2 * (S + 1)) % KV_STAGE;
-
-                PROF_BEGIN_X(EV_MMA_WAIT_V);
-                mbarrier_wait(kv_full(s_V_S), (phase_kv_full >> s_V_S) & 1);
-                phase_kv_full ^= 1 << s_V_S;
-                PROF_END_X(EV_MMA_WAIT_V);
-
-                // stage 0: PV_0_S, wait K_{S+1}, Q0K_{S+1}
-#if !SKIP_SM_FULL
-                PROF_BEGIN_X(EV_MMA_WAIT_PR0);
-                mbarrier_wait(s_p_o_empty(0),     (phase_spe >> 0) & 1); phase_spe ^= 1 << 0;
-  #if !SPLIT_P_PV
-                mbarrier_wait(p_lastsplit_full(0), (phase_pls >> 0) & 1); phase_pls ^= 1 << 0;
-  #endif
-                PROF_END_X(EV_MMA_WAIT_PR0);
-#endif
-                {
-                    int pls_p0 = (phase_pls >> 0) & 1;
-#if SPLIT_P_PV && !SKIP_SM_FULL
-                    phase_pls ^= 1 << 0;
-#endif
-                    PROF_BEGIN_X(EV_MMA_PV_P0);
-                    ISSUE_PV(0, s_V_S, S == 0, pls_p0);
-                    PROF_END_X(EV_MMA_PV_P0);
-                }
-                PROF_BEGIN_X(EV_MMA_WAIT_K);
-                mbarrier_wait(kv_full(s_K_next), (phase_kv_full >> s_K_next) & 1);
-                phase_kv_full ^= 1 << s_K_next;
-                PROF_END_X(EV_MMA_WAIT_K);
-                PROF_BEGIN_X(EV_MMA_QK_P0);
-                ISSUE_QK(0, s_K_next);
-                PROF_END_X(EV_MMA_QK_P0);
-
-                // stage 1: PV_1_S, release V_S, Q1K_{S+1}
-#if !SKIP_SM_FULL
-                PROF_BEGIN_X(EV_MMA_WAIT_PR1);
-                mbarrier_wait(s_p_o_empty(1),     (phase_spe >> 1) & 1); phase_spe ^= 1 << 1;
-  #if !SPLIT_P_PV
-                mbarrier_wait(p_lastsplit_full(1), (phase_pls >> 1) & 1); phase_pls ^= 1 << 1;
-  #endif
-                PROF_END_X(EV_MMA_WAIT_PR1);
-#endif
-                {
-                    int pls_p1 = (phase_pls >> 1) & 1;
-#if SPLIT_P_PV && !SKIP_SM_FULL
-                    phase_pls ^= 1 << 1;
-#endif
-                    PROF_BEGIN_X(EV_MMA_PV_P1);
-                    ISSUE_PV(1, s_V_S, S == 0, pls_p1);
-                    PROF_END_X(EV_MMA_PV_P1);
-                }
-                // Release V_S after both PVs
-                asm volatile(
-                    "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
-                    ".multicast::cluster.b64 [%0], %1;" ::
-                        "r"(kv_empty(s_V_S)), "h"(cta_mask) : "memory");
-                PROF_BEGIN_X(EV_MMA_QK_P1);
-                ISSUE_QK(1, s_K_next);
-                PROF_END_X(EV_MMA_QK_P1);
-                // Release K_{S+1} after both QKs
-                asm volatile(
-                    "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
-                    ".multicast::cluster.b64 [%0], %1;" ::
-                        "r"(kv_empty(s_K_next)), "h"(cta_mask) : "memory");
-            }
-
-            // Epilogue: PV_0 and PV_1 for the last iter (n_kv-1), no QK
-            {
-                const int s_V_last = (2 * (n_kv - 1) + 1) % KV_STAGE;
-                PROF_BEGIN_X(EV_MMA_WAIT_V);
-                mbarrier_wait(kv_full(s_V_last), (phase_kv_full >> s_V_last) & 1);
-                phase_kv_full ^= 1 << s_V_last;
-                PROF_END_X(EV_MMA_WAIT_V);
-
-                // stage 0
-#if !SKIP_SM_FULL
-                PROF_BEGIN_X(EV_MMA_WAIT_PR0);
-                mbarrier_wait(s_p_o_empty(0),     (phase_spe >> 0) & 1); phase_spe ^= 1 << 0;
-  #if !SPLIT_P_PV
-                mbarrier_wait(p_lastsplit_full(0), (phase_pls >> 0) & 1); phase_pls ^= 1 << 0;
-  #endif
-                PROF_END_X(EV_MMA_WAIT_PR0);
-#endif
-                {
-                    int pls_p0 = (phase_pls >> 0) & 1;
-#if SPLIT_P_PV && !SKIP_SM_FULL
-                    phase_pls ^= 1 << 0;
-#endif
-                    PROF_BEGIN_X(EV_MMA_PV_P0);
-                    ISSUE_PV(0, s_V_last, n_kv == 1, pls_p0);
-                    PROF_END_X(EV_MMA_PV_P0);
-                }
-#if PER_PAIR_DRAIN
-                MMA_PAIR_DRAIN_COMMIT(o_acc_full(0));
-#endif
-
-                // stage 1
-#if !SKIP_SM_FULL
-                PROF_BEGIN_X(EV_MMA_WAIT_PR1);
-                mbarrier_wait(s_p_o_empty(1),     (phase_spe >> 1) & 1); phase_spe ^= 1 << 1;
-  #if !SPLIT_P_PV
-                mbarrier_wait(p_lastsplit_full(1), (phase_pls >> 1) & 1); phase_pls ^= 1 << 1;
-  #endif
-                PROF_END_X(EV_MMA_WAIT_PR1);
-#endif
-                {
-                    int pls_p1 = (phase_pls >> 1) & 1;
-#if SPLIT_P_PV && !SKIP_SM_FULL
-                    phase_pls ^= 1 << 1;
-#endif
-                    PROF_BEGIN_X(EV_MMA_PV_P1);
-                    ISSUE_PV(1, s_V_last, n_kv == 1, pls_p1);
-                    PROF_END_X(EV_MMA_PV_P1);
-                }
-#if PER_PAIR_DRAIN
-                MMA_PAIR_DRAIN_COMMIT(o_acc_full(1));
-#endif
-                // Release V_last
-                asm volatile(
-                    "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
-                    ".multicast::cluster.b64 [%0], %1;" ::
-                        "r"(kv_empty(s_V_last)), "h"(cta_mask) : "memory");
-            }
-#endif
-#if !PER_PAIR_DRAIN
             // Final tcgen05 commit drains all in-flight MMAs.
             asm volatile(
                 "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster"
                 ".multicast::cluster.b64 [%0], %1;" ::
                     "r"(tmem_dealloc), "h"(cta_mask) : "memory");
-#endif
         }
 
     } else if (warp_id == EPI_WARP) {
         // ============================================================
         // EPILOGUE (warp 13, stub: wait o_epi, sentinel store)
         // ============================================================
-#if !SKIP_SM_FULL
         PROF_BEGIN_X(EV_EPI_WAIT);
         mbarrier_wait(o_epi_full(0), 0);
         mbarrier_wait(o_epi_full(1), 0);
         PROF_END_X(EV_EPI_WAIT);
-#endif
 
     } else if (warp_id == LOAD_WARP) {
         // ============================================================
@@ -2096,24 +1333,10 @@ llm_fa_kernel(
     // (warp 15 = empty: just dec regs at top, then fall through to tail)
 
     // -------- Tail: wait MMA done, full epi from TMEM, dealloc --------
-#if PER_PAIR_DRAIN
-    // Per-pair drain: warps 0-3 wait o_acc_full(0), warps 4-7 wait o_acc_full(1).
-    // Pair 0 epi can start while MMA is still issuing pair 1 PV → tail latency
-    // collapses by ~(pair-1 MMA time) on critical path. tcgen05.dealloc is
-    // gated by an all-warps __syncthreads() AFTER both per-pair epis complete.
-    if (warp_id < 4) {
-        mbarrier_wait(o_acc_full(0), 0);
-    } else if (warp_id < 8) {
-        mbarrier_wait(o_acc_full(1), 0);
-    }
-    asm volatile("tcgen05.fence::after_thread_sync;");
-#else
     __syncthreads();
     mbarrier_wait(tmem_dealloc, 0);
     asm volatile("tcgen05.fence::after_thread_sync;");
-#endif
 
-#if EPI_FULL
     // Full epilogue: TMEM → reg → gmem. Warps 0-3 handle pair 0 (rows 0..127
     // of pair 0 across all 4 warps × 32 lanes). Warps 4-7 handle pair 1.
     // Each lane k of warp w:
@@ -2181,28 +1404,6 @@ llm_fa_kernel(
             }
         }
     }
-#else
-    // Legacy sentinel epi: writes 4 fp32 per warp per CTA for quick verify.
-    if (warp_id < 4) {
-        const int row_addr_p0 = O_acc_p0 + ((warp_id * 32) << 16);
-        const int row_addr_p1 = O_acc_p1 + ((warp_id * 32) << 16);
-        float v0, v1;
-        asm volatile("tcgen05.ld.sync.aligned.32x32b.x1.b32 {%0}, [%1];"
-                     : "=f"(v0) : "r"(row_addr_p0));
-        asm volatile("tcgen05.ld.sync.aligned.32x32b.x1.b32 {%0}, [%1];"
-                     : "=f"(v1) : "r"(row_addr_p1));
-        asm volatile("tcgen05.wait::ld.sync.aligned;");
-        if (lane_id == 0) {
-            float* sScale_ptr = (float*)(smem_ptr + (Q_BYTES_TOTAL + O_BYTES_TOTAL + KV_BYTES_TOTAL));
-            const int row = warp_id * 32;
-            const float l0 = sScale_ptr[Q_STAGE * M_PER_CTA + 0 * M_PER_CTA + row];
-            const float l1 = sScale_ptr[Q_STAGE * M_PER_CTA + 1 * M_PER_CTA + row];
-            const int base = (int)blockIdx.y * 64 + (int)cta_rank * 32;
-            O_gmem[base + warp_id]      = v0 / l0;
-            O_gmem[base + 16 + warp_id] = v1 / l1;
-        }
-    }
-#endif
     __syncthreads();
     if (warp_id == 1) {
         asm volatile(
@@ -2254,13 +1455,8 @@ std::vector<torch::Tensor> llm_fa_forward(torch::Tensor Q, torch::Tensor K, torc
     cudaFuncSetAttribute(llm_fa_kernel,
                          cudaFuncAttributeMaxDynamicSharedMemorySize, DYN_SMEM_BYTES);
 
-#if EPI_FULL
     auto opts = torch::TensorOptions().dtype(torch::kBFloat16).device(torch::kCUDA);
     auto O = torch::zeros({(int64_t)queries, (int64_t)N_DIM}, opts);
-#else
-    auto opts = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
-    auto O = torch::zeros({(int64_t)num_clusters * 64}, opts);
-#endif
 
     auto i32_opts = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
     auto prof_buf = torch::zeros({PROF_MAX_EVENTS * 6}, i32_opts);
@@ -2269,11 +1465,7 @@ std::vector<torch::Tensor> llm_fa_forward(torch::Tensor Q, torch::Tensor K, torc
     dim3 grid(CTA_GROUP, num_clusters, 1);
     llm_fa_kernel<<<grid, TB_SIZE, DYN_SMEM_BYTES>>>(
         Q_tmap, K_tmap, V_tmap,
-#if EPI_FULL
         reinterpret_cast<__nv_bfloat16*>(O.data_ptr()), n_kv,
-#else
-        reinterpret_cast<float*>(O.data_ptr()), n_kv,
-#endif
         reinterpret_cast<ProfEvent*>(prof_buf.data_ptr()),
         reinterpret_cast<int*>(prof_count.data_ptr()));
     cudaError_t err = cudaGetLastError();
