@@ -1,7 +1,7 @@
-"""Build all three kernels and validate redist_v8d against torch SDPA.
+"""Build all three kernels and validate llm_fa against torch SDPA.
 
 Scaffolding and faux kernels intentionally produce incorrect output (no real
-softmax math); we just verify they BUILD AND RUN. redist_v8d's output is
+softmax math); we just verify they BUILD AND RUN. llm_fa's output is
 verified against torch.nn.functional.scaled_dot_product_attention to
 bf16 precision (max_abs ≲ 1e-3, mean_abs ≲ 1e-4).
 """
@@ -52,7 +52,7 @@ def main():
     print(f"shape q={args.q}  sk={args.sk}  D=128  bf16  non-causal")
     print(f"building all three kernels (first build can take 60-180 s) …")
 
-    import scaffolding, faux, redist_v8d  # noqa: E402
+    import scaffolding, faux, llm_fa  # noqa: E402
 
     torch.manual_seed(args.seed)
     Q = torch.randn(args.q,  128, device="cuda", dtype=torch.bfloat16)
@@ -63,7 +63,7 @@ def main():
 
     report("scaffolding",   scaffolding.forward(Q, K, V), ref=None)
     report("faux",          faux.forward(Q, K, V),        ref=None)
-    report("redist_v8d",    redist_v8d.forward(Q, K, V),  ref=ref)
+    report("llm_fa",        llm_fa.forward(Q, K, V),      ref=ref)
 
 
 if __name__ == "__main__":

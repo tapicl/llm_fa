@@ -1,4 +1,4 @@
-"""redist_v8d — FA forward on B200 (sm_100a), full softmax + correction + final divide.
+"""llm_fa — FA forward on B200 (sm_100a), full softmax + correction + final divide.
 
 The fastest C++/PTX full-attention kernel in this repo. Trails stock FA4 by
 ~143 ns per main-loop iter (ratio 0.947) at q=32768/sk=131072 single-wave.
@@ -35,14 +35,14 @@ HERE = Path(__file__).parent
 ENABLE_PROF = int(os.environ.get("ENABLE_PROF", "0"))
 
 mod = load_inline(
-    name=f"redist_v8d{'_prof' if ENABLE_PROF else ''}",
+    name=f"llm_fa{'_prof' if ENABLE_PROF else ''}",
     cpp_sources=(
         '#include <torch/extension.h>\n'
         '#include <vector>\n'
-        'std::vector<torch::Tensor> redist_v8d_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V);'
+        'std::vector<torch::Tensor> llm_fa_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V);'
     ),
-    cuda_sources=(HERE / "redist_v8d.cu").read_text(),
-    functions=["redist_v8d_forward"],
+    cuda_sources=(HERE / "llm_fa.cu").read_text(),
+    functions=["llm_fa_forward"],
     extra_cuda_cflags=[
         "-O3", "-gencode=arch=compute_100a,code=sm_100a",
         "--use_fast_math", "-std=c++17", "-lineinfo", "-Xptxas=-v",
@@ -62,7 +62,7 @@ def forward(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
     V: (sk, 128) bf16.
     Returns (q, 128) bf16 matching torch SDPA to bf16 precision (max_abs ≲ 1e-3).
     """
-    return mod.redist_v8d_forward(Q, K, V)[0]
+    return mod.llm_fa_forward(Q, K, V)[0]
 
 
 def run(q: int = 32768, sk: int = 131072, seed: int = 0):
@@ -75,7 +75,7 @@ def run(q: int = 32768, sk: int = 131072, seed: int = 0):
     Q = torch.randn(q,  128, device="cuda", dtype=torch.bfloat16)
     K = torch.randn(sk, 128, device="cuda", dtype=torch.bfloat16)
     V = torch.randn(sk, 128, device="cuda", dtype=torch.bfloat16)
-    return mod.redist_v8d_forward(Q, K, V)
+    return mod.llm_fa_forward(Q, K, V)
 
 
 if __name__ == "__main__":
@@ -84,5 +84,5 @@ if __name__ == "__main__":
     sk = int(sys.argv[2]) if len(sys.argv) > 2 else 131072
     out = run(q=q, sk=sk)
     O = out[0] if isinstance(out, (list, tuple)) else out
-    print(f"redist_v8d OK  q={q}  sk={sk}  O.shape={tuple(O.shape)}  "
+    print(f"llm_fa OK  q={q}  sk={sk}  O.shape={tuple(O.shape)}  "
           f"sum={O.float().sum().item():.3e}")

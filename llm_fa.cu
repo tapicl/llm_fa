@@ -1,4 +1,4 @@
-// redist_v8.cu — extends redist_v6 with FULL online softmax + correction.
+// llm_fa.cu — extends redist_v6 with FULL online softmax + correction.
 //
 // What's new vs redist_v6:
 //   * Real online softmax in WG0/1: track per-lane m_i (running rowmax) and
@@ -740,7 +740,7 @@ __device__ __forceinline__ void emit_rescale_O(int o_addr, float scale) {
 // Kernel
 // =============================================================================
 __global__ void __cluster_dims__(CTA_GROUP, 1, 1) __launch_bounds__(TB_SIZE, 1)
-redist_v8d_kernel(
+llm_fa_kernel(
     const __grid_constant__ CUtensorMap Q_tmap,
     const __grid_constant__ CUtensorMap K_tmap,
     const __grid_constant__ CUtensorMap V_tmap,
@@ -2176,7 +2176,7 @@ redist_v8d_kernel(
 // =============================================================================
 // Host launch  (mirrors v4: same TMA tensormap encoding for Q/K/V)
 // =============================================================================
-std::vector<torch::Tensor> redist_v8d_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
+std::vector<torch::Tensor> llm_fa_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
     TORCH_CHECK(Q.is_cuda() && K.is_cuda() && V.is_cuda(), "cuda only");
     TORCH_CHECK(Q.dtype() == torch::kBFloat16, "bf16");
     TORCH_CHECK(Q.dim() == 2 && Q.size(1) == N_DIM, "Q [queries, 128]");
@@ -2213,7 +2213,7 @@ std::vector<torch::Tensor> redist_v8d_forward(torch::Tensor Q, torch::Tensor K, 
     encode(&V_tmap, reinterpret_cast<const nv_bfloat16*>(V.data_ptr()), (uint64_t)Sk,
            (uint32_t)BLOCK_K, 1);
 
-    cudaFuncSetAttribute(redist_v8d_kernel,
+    cudaFuncSetAttribute(llm_fa_kernel,
                          cudaFuncAttributeMaxDynamicSharedMemorySize, DYN_SMEM_BYTES);
 
 #if EPI_FULL
@@ -2229,7 +2229,7 @@ std::vector<torch::Tensor> redist_v8d_forward(torch::Tensor Q, torch::Tensor K, 
     auto prof_count = torch::zeros({1}, i32_opts);
 
     dim3 grid(CTA_GROUP, num_clusters, 1);
-    redist_v8d_kernel<<<grid, TB_SIZE, DYN_SMEM_BYTES>>>(
+    llm_fa_kernel<<<grid, TB_SIZE, DYN_SMEM_BYTES>>>(
         Q_tmap, K_tmap, V_tmap,
 #if EPI_FULL
         reinterpret_cast<__nv_bfloat16*>(O.data_ptr()), n_kv,

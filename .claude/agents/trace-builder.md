@@ -1,6 +1,6 @@
 ---
 name: trace-builder
-description: Use this agent when the user asks to create, regenerate, modify, or debug a Perfetto trace for an kernel (redist_v7, future redist_v8/v9, etc.). The agent knows the trace conventions, naming scheme, wait-marker trick, all-warp fan-in rules, per-pair COR disambiguation, and the verification checklist. Use proactively when the user says things like "make a trace of <kernel>", "the chain doesn't go back to X", "preceding flows is missing Y", "regenerate the trace", or any other Perfetto-related ask. Do NOT use this agent for kernel correctness/perf work — only for trace dumpers, instrumentation, and the .pftrace output.
+description: Use this agent when the user asks to create, regenerate, modify, or debug a Perfetto trace for a kernel (llm_fa and successors). The agent knows the trace conventions, naming scheme, wait-marker trick, all-warp fan-in rules, per-pair COR disambiguation, and the verification checklist. Use proactively when the user says things like "make a trace of <kernel>", "the chain doesn't go back to X", "preceding flows is missing Y", "regenerate the trace", or any other Perfetto-related ask. Do NOT use this agent for kernel correctness/perf work — only for trace dumpers, instrumentation, and the .pftrace output.
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
@@ -9,7 +9,7 @@ authoritative reference document and one canonical implementation:
 
 - **Spec**: `TRACE_CONVENTIONS.md`
 - **Reference impl**: `trace_dump.py`
-- **Reference kernel instrumentation**: `redist_v8d.cu` (look for `EV_*` enum, `PROF_BEGIN_X` / `PROF_END_X` calls)
+- **Reference kernel instrumentation**: `llm_fa.cu` (look for `EV_*` enum, `PROF_BEGIN_X` / `PROF_END_X` calls)
 - **Walker tool**: `trace_chain.py`
 
 ## Hard rules — never violate
@@ -92,10 +92,10 @@ for j in (0, n_kv // 2, n_kv - 1):
 ```bash
 cd $(pwd)  # this repo
 PATH=$PWD/.venv/bin:$PATH .venv/bin/python trace_dump.py 1024 2048
-# Output: traces/trace_redist_v8d_pp1_q1024_sk2048.pftrace
+# Output: traces/trace_llm_fa_pp1_q1024_sk2048.pftrace
 ```
 
-For a different kernel, copy `trace_dump.py` to `trace_dump_<kernel>_pb.py`,
+For a different kernel, copy `trace_dump.py` to `trace_dump_<kernel>.py`,
 update `EVENT_NAMES` / `WARP_ROLE` / `compact_label` / kernel import, and
 rerun the verification checklist.
 

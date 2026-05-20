@@ -1,4 +1,4 @@
-"""NCU clock-locked bench: scaffolding / faux / redist_v8d vs stock FA4.
+"""NCU clock-locked bench: scaffolding / faux / llm_fa vs stock FA4.
 
 Single-wave shapes (q ≤ 32768 → ≤ 64 cga2 cluster slots on B200's 74 slots).
 Prints one row per (kernel, shape) with median µs over `iters` runs after
@@ -12,7 +12,7 @@ Requires:
 Usage:
   python bench.py                  # full table
   python bench.py --quick          # 1 shape only (q=32768/sk=131072)
-  python bench.py --kernels redist_v8d   # subset
+  python bench.py --kernels llm_fa   # subset
 """
 import argparse
 import csv
@@ -47,7 +47,7 @@ KERNELS = {
     # name            : (worker script path,   kernel_re,                         build_warmup_call)
     "scaffolding": ("scaffolding",  "regex:redist_v6_kernel"),
     "faux":        ("faux",         "regex:fa4_faux_attn_kernel"),
-    "redist_v8d":  ("redist_v8d",   "regex:redist_v8d_kernel"),
+    "llm_fa":      ("llm_fa",       "regex:llm_fa_kernel"),
     "FA4":         ("fa4",          "regex:.*FlashAttentionForwardSm100[^F].*"),
 }
 
@@ -94,13 +94,13 @@ def write_worker(name: str) -> Path:
                 'V = torch.randn(sk, 128, device="cuda", dtype=torch.bfloat16).contiguous()'),
             call_line="mod.fa4_faux_attn_forward(Q, K, V)",
         ),
-        "redist_v8d": dict(
-            import_line="from redist_v8d import mod",
+        "llm_fa": dict(
+            import_line="from llm_fa import mod",
             shape_setup=(
                 'Q = torch.randn(q,  128, device="cuda", dtype=torch.bfloat16).contiguous()\n'
                 'K = torch.randn(sk, 128, device="cuda", dtype=torch.bfloat16).contiguous()\n'
                 'V = torch.randn(sk, 128, device="cuda", dtype=torch.bfloat16).contiguous()'),
-            call_line="mod.redist_v8d_forward(Q, K, V)",
+            call_line="mod.llm_fa_forward(Q, K, V)",
         ),
         "FA4": dict(
             import_line="from flash_attn.cute import flash_attn_func",
@@ -211,7 +211,7 @@ def main():
     print("\n" + "=" * 92)
     print(f"{'shape':<18} {'n_kv':>5} " +
           " ".join(f"{n:>12}" for n in args.kernels) +
-          f" {'v8d/FA4':>9} {'ns/iter':>10}")
+          f" {'llm_fa/FA4':>10} {'ns/iter':>10}")
     print("-" * 92)
     for (q, sk) in shapes:
         n_kv = sk // 128
@@ -221,19 +221,19 @@ def main():
             s = results.get((q, sk, name))
             cells.append(f"{s['median']:>12.1f}" if s else f"{'-':>12}")
         cs = " ".join(cells)
-        # ratio + ns/iter for redist_v8d vs FA4 (if both present)
-        v8d = results.get((q, sk, "redist_v8d"))
+        # ratio + ns/iter for llm_fa vs FA4 (if both present)
+        ours = results.get((q, sk, "llm_fa"))
         fa4 = results.get((q, sk, "FA4"))
-        if v8d and fa4:
-            ratio = fa4["median"] / v8d["median"]
-            dpi = (fa4["median"] - v8d["median"]) * 1000 / n_kv
-            print(f"{row:<18} {n_kv:>5} {cs} {ratio:>9.3f} {dpi:>+8.1f}ns")
+        if ours and fa4:
+            ratio = fa4["median"] / ours["median"]
+            dpi = (fa4["median"] - ours["median"]) * 1000 / n_kv
+            print(f"{row:<18} {n_kv:>5} {cs} {ratio:>10.3f} {dpi:>+8.1f}ns")
         else:
-            print(f"{row:<18} {n_kv:>5} {cs} {'-':>9} {'-':>10}")
+            print(f"{row:<18} {n_kv:>5} {cs} {'-':>10} {'-':>10}")
 
     print()
-    print("# ratio = FA4 / redist_v8d   (1.0 means tied; <1 means we trail FA4)")
-    print("# ns/iter = (FA4_us − v8d_us) × 1000 / n_kv   (negative = trail)")
+    print("# ratio = FA4 / llm_fa   (1.0 means tied; <1 means we trail FA4)")
+    print("# ns/iter = (FA4_us − llm_fa_us) × 1000 / n_kv   (negative = trail)")
 
 
 if __name__ == "__main__":

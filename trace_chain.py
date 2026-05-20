@@ -2,7 +2,7 @@
 
 Usage:
   python trace_chain.py P0V7
-  python trace_chain.py P0V7 --trace setmaxn_test/traces/trace_redist_v8d_pp1_q512_sk512.pftrace
+  python trace_chain.py P0V7 --trace traces/trace_llm_fa_pp1_q512_sk512.pftrace
   python trace_chain.py P0V7 --depth 6   # cap walk depth
   python trace_chain.py P0V7 --forward   # walk outgoing instead of incoming
 """
@@ -11,7 +11,7 @@ from pathlib import Path
 from perfetto.trace_processor import TraceProcessor
 
 HERE = Path(__file__).parent
-DEFAULT_TRACE = HERE / "traces" / "trace_redist_v8d_pp1_q512_sk512.pftrace"
+DEFAULT_TRACE = HERE / "traces" / "trace_llm_fa_pp1_q512_sk512.pftrace"
 
 
 def main():

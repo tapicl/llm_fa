@@ -1,6 +1,6 @@
 # Perfetto Trace Conventions
 
-All future kernel traces (redist_v8, v9, ...) MUST follow these conventions.
+All future kernel traces (llm_fa and successors) MUST follow these conventions.
 Reference implementation: `trace_dump.py`.
 
 ## Goal
@@ -215,11 +215,11 @@ After regenerating, run these queries against the trace via `TraceProcessor`.
 
 ```bash
 PATH=$PWD/.venv/bin:$PATH .venv/bin/python trace_dump.py 1024 2048
-# Output: traces/trace_redist_v8d_pp1_q1024_sk2048.pftrace
+# Output: traces/trace_llm_fa_pp1_q1024_sk2048.pftrace
 ```
 
-For a new kernel `redist_vN`:
-1. Copy `trace_dump.py` to `trace_dump_vN_pb.py`.
+For a successor kernel:
+1. Copy `trace_dump.py` to `trace_dump_<successor>.py`.
 2. Update `EVENT_NAMES`, `WARP_ROLE`, `compact_label`, and the kernel module
    import to match the new kernel's profiler buffer layout.
 3. Update the encoded-edges section (n_kv loop) for any new pipeline edges.

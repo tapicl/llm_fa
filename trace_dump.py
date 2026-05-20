@@ -1,9 +1,9 @@
-"""trace_dump.py — Perfetto PROTOBUF (.pftrace) dumper for redist_v8d.
+"""trace_dump.py — Perfetto PROTOBUF (.pftrace) dumper for llm_fa.
 
 Adapted from trace_dump_v7_pb.py. Adds rendering for the new SM0/SM1
 ping-pong events (EV_PP_WAIT=20, EV_PP_ARRIVE=21) on the SM warp tracks.
 
-Output: traces/trace_redist_v8d_pp{PP}_q{Q}_sk{SK}.pftrace
+Output: traces/trace_llm_fa_pp{PP}_q{Q}_sk{SK}.pftrace
 
 Open in https://ui.perfetto.dev (drag-and-drop).
 
@@ -103,14 +103,14 @@ def main():
     GHZ = 1.965
     NS_PER_CYCLE = 1.0 / GHZ  # nanoseconds
 
-    import redist_v8d
+    import llm_fa
 
     # Warm-up (JIT compile + caches), then measure.
     for _ in range(3):
-        redist_v8d.run(q=q, sk=sk)
+        llm_fa.run(q=q, sk=sk)
     torch.cuda.synchronize()
 
-    O, prof_buf, prof_count = redist_v8d.run(q=q, sk=sk)
+    O, prof_buf, prof_count = llm_fa.run(q=q, sk=sk)
     torch.cuda.synchronize()
     n = int(prof_count.cpu().item())
     cap = prof_buf.numel() // 6
@@ -256,7 +256,7 @@ def main():
     pkt.track_descriptor.uuid = PROCESS_UUID
     pkt.track_descriptor.process.pid = PID
     pkt.track_descriptor.process.process_name = (
-        f"redist_v8d q={q} sk={sk} PP={PP} L4={L4} n_kv_capt={n_kv}"
+        f"llm_fa q={q} sk={sk} PP={PP} L4={L4} n_kv_capt={n_kv}"
     )
     pkt.trusted_packet_sequence_id = SEQ
     pkt.first_packet_on_sequence = True
@@ -315,7 +315,7 @@ def main():
                 pkt.track_event.terminating_flow_ids.append(fid)
         pkt.trusted_packet_sequence_id = SEQ
 
-    out_path = TRACES_DIR / f"trace_redist_v8d_pp{PP}_q{q}_sk{sk}.pftrace"
+    out_path = TRACES_DIR / f"trace_llm_fa_pp{PP}_q{q}_sk{sk}.pftrace"
     with open(out_path, "wb") as f:
         f.write(builder.serialize())
 

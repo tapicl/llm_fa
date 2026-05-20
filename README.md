@@ -1,7 +1,7 @@
-# redist_v8d — FlashAttention forward for NVIDIA B200 (sm_100a)
+# llm_fa — FlashAttention forward for NVIDIA B200 (sm_100a)
 
 A C++/inline-PTX implementation of FlashAttention forward (BF16, head_dim=128,
-non-causal). On a B200 at NCU-locked clocks, **`redist_v8d` trails the stock
+non-causal). On a B200 at NCU-locked clocks, **`llm_fa` trails the stock
 CuTeDSL FA4 reference by ~160 ns per main-loop iteration (ratio 0.94)** at
 single-wave shapes — i.e. ~6% slower than FA4 while staying entirely in
 public PTX. Built directly against `tcgen05.mma` / `cp.async.bulk.tensor` /
@@ -14,18 +14,18 @@ completeness:
 |---|---|---|
 | `scaffolding.cu` | TMA + cga2 MMA + 7-pipeline mbarrier choreography. Softmax warps and the correction warp drive the barrier protocol but skip all compute. | **garbage** (intentional) |
 | `faux.cu` | + 4-stream row-max + `acc_scale = exp2((m_old − m_new)·log2(e)/√D)` STS + COR FMUL2 rescale of O via TMEM LD→FMUL→ST. Still no softmax exp or final divide. | **garbage** (intentional) |
-| `redist_v8d.cu` | + real online softmax (per-lane m_i / l_i) + `cvt.bf16x2` of `exp2(S − m_new)` for P + final 1/l divide. | **correct** (matches torch SDPA to bf16 precision) |
+| `llm_fa.cu` | + real online softmax (per-lane m_i / l_i) + `cvt.bf16x2` of `exp2(S − m_new)` for P + final 1/l divide. | **correct** (matches torch SDPA to bf16 precision) |
 
 Each adds one phase to the previous; the wallclock cost of each phase shows
 where the time goes.
 
 ## Regression per main-loop iter vs FA4
 
-Headline number. Per-iter latency gap between `redist_v8d` and stock FA4,
+Headline number. Per-iter latency gap between `llm_fa` and stock FA4,
 extracted from NCU (`gpu__time_duration.sum`, median of 10 after 3 warmups,
-clock-locked). Negative = v8d is slower per main-loop iter than FA4.
+clock-locked). Negative = llm_fa is slower per main-loop iter than FA4.
 
-| Shape (q, sk)  | n_kv | redist_v8d µs | FA4 µs | FA4/v8d | **regression / iter** |
+| Shape (q, sk)  | n_kv | llm_fa µs | FA4 µs | FA4/llm_fa | **regression / iter** |
 |---------------:|----:|---:|---:|---:|---:|
 | 16384, 16384   |  128 |  385.3 |  360.6 | 0.936 | **−192.6 ns** |
 | 16384, 32768   |  256 |  733.2 |  686.6 | 0.936 | **−182.4 ns** |
@@ -39,7 +39,7 @@ clock-locked). Negative = v8d is slower per main-loop iter than FA4.
 Floor across the sweep: **−160 ns/iter** at q=32768/sk=131072 (the largest
 single-wave shape; ratio 0.942). Asymptote sits at ~−160 to −180 ns/iter;
 the gap does not amortize toward zero as n_kv grows. Multi-wave shapes
-(q > 32768) widen the gap to roughly −300 ns/iter because v8d runs 1.73
+(q > 32768) widen the gap to roughly −300 ns/iter because llm_fa runs 1.73
 waves on a 74-cga2 GPU while FA4 is persistent (1 wave).
 
 Reproduce with `python bench.py` (see below).
@@ -49,7 +49,7 @@ Reproduce with `python bench.py` (see below).
 NCU `gpu__time_duration.sum` metric, median of 10 runs after 3 warmups.
 B200 has 74 cga2 cluster slots; q ≤ 32768 (= 64 clusters) stays single-wave.
 
-| Shape (q, sk) | n_kv | scaffolding µs | faux µs | **redist_v8d µs** | FA4 µs | FA4/v8d | ns/iter |
+| Shape (q, sk) | n_kv | scaffolding µs | faux µs | **llm_fa µs** | FA4 µs | FA4/llm_fa | ns/iter |
 |--------------:|----:|---:|---:|---:|---:|---:|---:|
 | 16384, 16384  |  128 |  344.6 |  319.1 |  **385.3** |  360.6 | 0.936 | −192.6 |
 | 16384, 32768  |  256 |  658.0 |  606.7 |  **733.2** |  686.6 | 0.936 | −182.4 |
@@ -61,8 +61,8 @@ B200 has 74 cga2 cluster slots; q ≤ 32768 (= 64 clusters) stays single-wave.
 | 32768, 131072 | 1024 | 2538.8 | 2358.3 | **2809.2** | 2645.3 | 0.942 | −160.1 |
 
 Notes:
-- `FA4/v8d` is the latency ratio FA4 µs ÷ v8d µs (<1 means v8d trails FA4).
-- `ns/iter = (FA4 − v8d) µs × 1000 / n_kv`; negative means v8d is slower per main-loop iter.
+- `FA4/llm_fa` is the latency ratio FA4 µs ÷ llm_fa µs (<1 means llm_fa trails FA4).
+- `ns/iter = (FA4 − llm_fa) µs × 1000 / n_kv`; negative means llm_fa is slower per main-loop iter.
 - The per-iter gap plateaus at **−160 to −180 ns/iter** at single-wave shapes;
   it does *not* keep amortizing toward zero with larger n_kv.
 
@@ -75,7 +75,7 @@ per main-loop iteration. That maps to roughly:
   SM warp's first wait each iter, waiting for MMA's QK^T commit. FA4 does
   more LDS-heavy work per iter, so MMA's commit fires *within* its SM iter
   body; ours is leaner → finishes faster → stalls.
-- Multi-wave shapes (q > 32768) widen this to ~−300 ns/iter because v8d
+- Multi-wave shapes (q > 32768) widen this to ~−300 ns/iter because llm_fa
   runs ≥1.73 waves while FA4 is persistent (1 wave).
 
 ## SMEM and warp layout (per CTA)
@@ -109,7 +109,7 @@ Total dynamic SMEM                    ≈ 226 KB
               ≈ 55296 regs/CTA, well under 64 K reg file
 ```
 
-## Key optimizations in `redist_v8d`
+## Key optimizations in `llm_fa`
 
 - **MMA reorder** — Q0K is issued one main-loop step BEFORE the matching
   P0V (and Q1K → P1V offset). Saves ~1 ms at worst case. See `MMA_REORDER`
@@ -161,7 +161,7 @@ python validate.py --q 4096 --sk 4096
 ```
 
 Compiles all three kernels, runs each at the given shape, and checks
-`redist_v8d` against `torch.nn.functional.scaled_dot_product_attention`.
+`llm_fa` against `torch.nn.functional.scaled_dot_product_attention`.
 Expected: `max_abs ≤ 1e-3`, `status: PASS`.
 
 First build of each kernel takes 60-180 s (mostly ptxas). Subsequent runs
@@ -172,7 +172,7 @@ use the cached `.so` under `~/.cache/torch_extensions/`.
 ```bash
 python bench.py                     # full table over single-wave shapes
 python bench.py --quick             # just q=32768/sk=131072
-python bench.py --kernels redist_v8d FA4
+python bench.py --kernels llm_fa FA4
 ```
 
 `bench.py` runs `ncu` for each (kernel, shape) pair and extracts
@@ -182,14 +182,14 @@ but apples-to-apples comparison requires the locked-clock metric.
 
 ## Perfetto traces
 
-`redist_v8d.cu` ships with an intra-kernel per-warp profiler ring (gated by
+`llm_fa.cu` ships with an intra-kernel per-warp profiler ring (gated by
 `-DENABLE_PROF=1` at compile time) that records per-event start/end clock
 deltas for the 22 `EV_*` regions defined in the source. `trace_dump.py`
 rebuilds the kernel with profiling enabled, runs it once at a small shape,
 and emits a `.pftrace` for [ui.perfetto.dev](https://ui.perfetto.dev).
 
 ```bash
-python trace_dump.py 1024 2048   # q=1024, sk=2048 → traces/trace_redist_v8d_pp1_q1024_sk2048.pftrace
+python trace_dump.py 1024 2048   # q=1024, sk=2048 → traces/trace_llm_fa_pp1_q1024_sk2048.pftrace
 ```
 
 The trace gives a clickable timeline of TMA / MMA / softmax / correction
@@ -201,7 +201,7 @@ walk dependencies one hop at a time (`P0V_<j>` → `Wco0_<j>` → `Rm0_<j>` →
 without opening the UI:
 
 ```bash
-python trace_chain.py Rm0_3 --trace traces/trace_redist_v8d_pp1_q1024_sk2048.pftrace --depth 4
+python trace_chain.py Rm0_3 --trace traces/trace_llm_fa_pp1_q1024_sk2048.pftrace --depth 4
 python trace_chain.py Q0K_3 --forward --trace …      # walk descendants
 ```
 
@@ -221,12 +221,12 @@ truncated. The dumper reports the actual captured iter count.
 
 ```python
 import torch
-import redist_v8d
+import llm_fa
 
 Q = torch.randn(32768, 128, device="cuda", dtype=torch.bfloat16)
 K = torch.randn(131072, 128, device="cuda", dtype=torch.bfloat16)
 V = torch.randn(131072, 128, device="cuda", dtype=torch.bfloat16)
-O = redist_v8d.forward(Q, K, V)   # (32768, 128) bf16
+O = llm_fa.forward(Q, K, V)   # (32768, 128) bf16
 ```
 
 Shape constraints: `q` multiple of 512, `sk` multiple of 128 with `sk ≥ 256`,
@@ -235,13 +235,13 @@ head dim fixed at 128.
 ## File layout
 
 ```
-redist_v8d_release/
+llm_fa/
 ├── README.md          ← you are here
 ├── profiler.cuh       intra-kernel per-warp shmem ring (only used when ENABLE_PROF=1)
 ├── scaffolding.cu / .py    TMA + MMA + mbarrier scaffold (stubbed softmax)
 ├── faux.cu / .py           + row-max + acc_scale + COR rescale (still stubbed exp)
-├── redist_v8d.cu / .py     full online softmax + final divide
-├── validate.py        build all 3, check redist_v8d vs torch SDPA
+├── llm_fa.cu / .py     full online softmax + final divide
+├── validate.py        build all 3, check llm_fa vs torch SDPA
 └── bench.py           NCU sweep with per-shape comparison table
 ```
 
@@ -252,7 +252,7 @@ research repo:
 
 - `scaffolding.cu`  ← `setmaxn_test/redist_v6.cu`
 - `faux.cu`         ← `fa4mimic_v2/faux_attn.cu`
-- `redist_v8d.cu`   ← `setmaxn_test/redist_v8d.cu`
+- `llm_fa.cu`   ← `setmaxn_test/redist_v8d.cu`
 
 `profiler.cuh` is from `final_kernels/`. Vendored verbatim; the only changes
 in this release directory are renamed `.py` launchers and the README.
