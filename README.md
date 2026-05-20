@@ -145,13 +145,28 @@ The CuTeDSL FA4 source these patterns mirror is at
   `setmaxnreg.{inc,dec}.sync.aligned.u32`, and `mbarrier.try_wait.parity`,
   none of which run on sm_90 or earlier.
 - **CUDA toolkit**: 13.0+ (the launcher uses NVCC's `-gencode arch=compute_100a,code=sm_100a`).
-- **Python**: 3.10+ with `torch` and `ninja`. Tested on torch 2.6 / CUDA 13.0.
-- **For bench only**: `flash-attn>=4.0` with the CuTeDSL backend, and `ncu`
-  in `$PATH` (or one of `/usr/local/cuda*/bin/ncu`).
+- **Python**: 3.10+ with `torch ≥ 2.6` and `ninja`. Tested on torch 2.11 / CUDA 13.0.
+- **For bench only**: `flash-attn-4 ≥ 4.0` (the CuTeDSL 4.x SKU; PyPI name is
+  `flash-attn-4`, not `flash-attn`), and `ncu` in `$PATH` (or under
+  `/usr/local/cuda*/bin/ncu`).
+- **For trace_dump.py / trace_chain.py**: `perfetto ≥ 0.16` (Python protobuf
+  builder + trace_processor).
+
+Install everything from the repo root via the `pyproject.toml`:
 
 ```bash
-pip install torch ninja
-pip install flash-attn>=4.0     # only required for bench.py
+pip install -e .                  # core: torch + ninja
+pip install -e ".[bench]"         # + flash-attn-4 (for bench.py)
+pip install -e ".[trace]"         # + perfetto    (for trace_dump.py, trace_chain.py)
+pip install -e ".[all]"           # all of the above
+```
+
+Or install the deps directly without `pip install -e .`:
+
+```bash
+pip install "torch>=2.6" ninja
+pip install "flash-attn-4>=4.0"    # only for bench.py
+pip install "perfetto>=0.16"       # only for trace_dump.py / trace_chain.py
 ```
 
 ## Build + validate

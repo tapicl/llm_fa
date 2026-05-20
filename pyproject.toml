@@ -1,0 +1,54 @@
+[project]
+name = "llm_fa"
+version = "0.1.0"
+description = "FlashAttention forward for NVIDIA B200 (sm_100a) — C++/PTX kernel trailing CuTeDSL FA4 by ~6%"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "dxyz" }]
+keywords = ["cuda", "flash-attention", "b200", "sm_100a", "tcgen05", "tma"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "Environment :: GPU :: NVIDIA CUDA :: 13",
+    "Operating System :: POSIX :: Linux",
+]
+
+# Core deps: needed to build + run any of the three kernels.
+# - torch supplies torch.utils.cpp_extension.load_inline (the JIT builder).
+# - ninja is what load_inline shells out to.
+dependencies = [
+    "torch>=2.6",
+    "ninja",
+]
+
+[project.optional-dependencies]
+# bench.py compares llm_fa against the stock FA4 reference; requires
+# the flash-attn 4.x CuTeDSL build, distributed as `flash-attn-4` on PyPI.
+bench = ["flash-attn-4>=4.0"]
+
+# trace_dump.py / trace_chain.py emit + walk Perfetto .pftrace files.
+trace = ["perfetto>=0.16"]
+
+# Everything.
+all = ["flash-attn-4>=4.0", "perfetto>=0.16"]
+
+[project.urls]
+Homepage = "https://github.com/tapicl/llm_fa"
+Issues   = "https://github.com/tapicl/llm_fa/issues"
+
+# Build backend: setuptools, top-level modules (no package directory).
+# `pip install -e .` lets you `import llm_fa` from anywhere; the .cu/.cuh
+# source files live alongside the .py launchers and are read at JIT time
+# via `(Path(__file__).parent / "*.cu").read_text()`, so editable installs
+# just work.
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = [
+    "llm_fa", "faux", "scaffolding",
+    "validate", "bench",
+    "trace_dump", "trace_chain",
+]
