@@ -19,6 +19,31 @@ completeness:
 Each adds one phase to the previous; the wallclock cost of each phase shows
 where the time goes.
 
+## Regression per main-loop iter vs FA4
+
+Headline number. Per-iter latency gap between `redist_v8d` and stock FA4,
+extracted from NCU (`gpu__time_duration.sum`, median of 10 after 3 warmups,
+clock-locked). Negative = v8d is slower per main-loop iter than FA4.
+
+| Shape (q, sk)  | n_kv | redist_v8d µs | FA4 µs | FA4/v8d | **regression / iter** |
+|---------------:|----:|---:|---:|---:|---:|
+| 16384, 16384   |  128 |  385.3 |  360.6 | 0.936 | **−192.6 ns** |
+| 16384, 32768   |  256 |  733.2 |  686.6 | 0.936 | **−182.4 ns** |
+| 16384, 65536   |  512 | 1380.6 | 1294.6 | 0.938 | **−167.9 ns** |
+| 16384, 131072  | 1024 | 2626.2 | 2451.7 | 0.934 | **−170.4 ns** |
+| 32768, 16384   |  128 |  438.7 |  412.4 | 0.940 | **−205.9 ns** |
+| 32768, 32768   |  256 |  821.1 |  776.1 | 0.945 | **−175.9 ns** |
+| 32768, 65536   |  512 | 1515.3 | 1432.2 | 0.945 | **−162.4 ns** |
+| 32768, 131072  | 1024 | 2809.2 | 2645.3 | 0.942 | **−160.1 ns** |
+
+Floor across the sweep: **−160 ns/iter** at q=32768/sk=131072 (the largest
+single-wave shape; ratio 0.942). Asymptote sits at ~−160 to −180 ns/iter;
+the gap does not amortize toward zero as n_kv grows. Multi-wave shapes
+(q > 32768) widen the gap to roughly −300 ns/iter because v8d runs 1.73
+waves on a 74-cga2 GPU while FA4 is persistent (1 wave).
+
+Reproduce with `python bench.py` (see below).
+
 ## Latency comparison (NCU clock-locked, single-wave shapes)
 
 NCU `gpu__time_duration.sum` metric, median of 10 runs after 3 warmups.
