@@ -1,5 +1,9 @@
 # llm_fa — FlashAttention forward for NVIDIA B200 (sm_100a)
 
+> Every file in this repo — the CUDA kernels, the Python launchers, the
+> bench/validate/trace harnesses, the trace-builder subagent, and this
+> README — was produced by prompting [Claude Code](https://claude.com/claude-code).
+
 A C++/inline-PTX implementation of FlashAttention forward (BF16, head_dim=128,
 non-causal). On a B200 at NCU-locked clocks, **`llm_fa` trails the stock
 CuTeDSL FA4 reference by ~160 ns per main-loop iteration (ratio 0.94)** at
@@ -195,7 +199,15 @@ python bench.py --kernels llm_fa FA4
 (~1.07 GHz on B200), so the wallclock from `cudaEvent` would be ~1.5× faster
 but apples-to-apples comparison requires the locked-clock metric.
 
+The **FA4** row is the stock CuTeDSL kernel from the `flash-attn-4` PyPI
+package — `flash_attn_func(Q, K, V, causal=False)` from `flash_attn.cute`,
+filtered in NCU by the kernel symbol `FlashAttentionForwardSm100` (the
+bf16 SM100 forward; the FP8 variant is excluded). See [`bench.py`](bench.py)
+`KERNELS["FA4"]` and the `FA4` worker block for the exact invocation.
+
 ## Perfetto traces
+
+![Perfetto timeline of llm_fa at q=2048/sk=4096, showing the 16-warp choreography with cross-warp flow edges](docs/perfetto_timeline.png)
 
 `llm_fa.cu` ships with an intra-kernel per-warp profiler ring (gated by
 `-DENABLE_PROF=1` at compile time) that records per-event start/end clock
